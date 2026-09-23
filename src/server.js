@@ -217,15 +217,19 @@ app.get('/test-full', async (req, res) => {
     });
 
     const numVideoInputs = inputArgs.filter(arg => arg === '-i').length;
+    const voiceInputIdx = numVideoInputs;
+    const ambienceInputIdx = numVideoInputs + 1;
+    const fullFilterGraph = `${filterGraph};[${voiceInputIdx}:a]volume=1.0[voice];[${ambienceInputIdx}:a]volume=0.08,lowpass=f=400[ambience];[voice][ambience]amix=inputs=2:duration=first:dropout_transition=2[outa]`;
 
     const ffmpegCmd = [
       '-y',
       '-threads', '2',
       ...inputArgs,
       '-i', audio,
-      '-filter_complex', filterGraph,
+      '-f', 'lavfi', '-i', `sine=f=55:b=4:d=${Math.ceil(duration) + 2}`,
+      '-filter_complex', fullFilterGraph,
       '-map', '[outv]',
-      '-map', `${numVideoInputs}:a`,
+      '-map', '[outa]',
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-tune', 'fastdecode',
@@ -341,15 +345,19 @@ app.post('/render-video', async (req, res) => {
       });
 
       const numVideoInputs = inputArgs.filter(arg => arg === '-i').length;
+      const voiceInputIdx = numVideoInputs;
+      const ambienceInputIdx = numVideoInputs + 1;
+      const fullFilterGraph = `${filterGraph};[${voiceInputIdx}:a]volume=1.0[voice];[${ambienceInputIdx}:a]volume=0.08,lowpass=f=400[ambience];[voice][ambience]amix=inputs=2:duration=first:dropout_transition=2[outa]`;
 
       const ffmpegCmd = [
         '-y',
         '-threads', '1',
         ...inputArgs,
         '-i', audioPath,
-        '-filter_complex', filterGraph,
+        '-f', 'lavfi', '-i', `sine=f=55:b=4:d=${Math.ceil(totalDuration) + 2}`,
+        '-filter_complex', fullFilterGraph,
         '-map', '[outv]',
-        '-map', `${numVideoInputs}:a`,
+        '-map', '[outa]',
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-tune', 'fastdecode',
@@ -438,6 +446,38 @@ app.post('/render-video', async (req, res) => {
   })();
 });
 
+/**
+ * 24/7 Keep-Alive Shield
+ * Render Free Tier containers spin down after 15 minutes of inactivity.
+ * Periodically probing the public HTTPS endpoint through Render's external proxy
+ * registers incoming web traffic and resets the 15-minute sleep countdown.
+ */
+const KEEP_ALIVE_INTERVAL_MS = 9 * 60 * 1000; // 9 minutes
+const PUBLIC_ENGINE_URL = process.env.RENDER_EXTERNAL_URL || 'https://edge-ai-video-engine.onrender.com';
+const PUBLIC_EVO_URL = process.env.EVOLUTION_API_URL || 'https://evolution-api-latest-b4dt.onrender.com';
+
+function startKeepAlive() {
+  console.log(`[KeepAlive] Initialized self-ping service targeting ${PUBLIC_ENGINE_URL} every 9m to prevent idle sleep.`);
+  setInterval(async () => {
+    try {
+      const pingUrl = `${PUBLIC_ENGINE_URL.replace(/\/+$/, '')}/health`;
+      const res = await fetch(pingUrl, { signal: AbortSignal.timeout(15000) });
+      console.log(`[KeepAlive] Engine self-ping (${pingUrl}) -> HTTP ${res.status}`);
+    } catch (err) {
+      console.warn(`[KeepAlive Warning] Engine self-ping failed:`, err.message);
+    }
+
+    try {
+      const evoUrl = `${PUBLIC_EVO_URL.replace(/\/+$/, '')}`;
+      const evoRes = await fetch(evoUrl, { signal: AbortSignal.timeout(15000) });
+      console.log(`[KeepAlive] Evolution API ping (${evoUrl}) -> HTTP ${evoRes.status}`);
+    } catch (err) {
+      console.warn(`[KeepAlive Warning] Evolution API ping failed:`, err.message);
+    }
+  }, KEEP_ALIVE_INTERVAL_MS);
+}
+
 app.listen(PORT, () => {
   console.log(`🚀 Edge Video Engine running on port ${PORT}`);
+  startKeepAlive();
 });

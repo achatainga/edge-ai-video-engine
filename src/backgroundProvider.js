@@ -112,28 +112,35 @@ export function buildMultiScenePipeline({
       `[0:v]format=rgb24,geq=r='20+15*sin(2*PI*(X/64+T/6))':g='22+18*cos(2*PI*(Y/64-T/5))':b='65+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic,format=yuv420p,setsar=1[raw_bg]`
     );
   } else {
-    // Multi-scene Ken Burns & B-roll assembly
+    // Multi-scene Ken Burns & B-roll assembly with micro-fades
+    const fadeDur = 0.25;
+
     validScenes.forEach((scene, idx) => {
       const dur = Math.max(1, Number(scene.durationSec) || 4);
+      const safeFadeOutStart = Math.max(0, dur - fadeDur);
 
       if (scene.type === 'video' && scene.filePath && fs.existsSync(scene.filePath)) {
-        // Video B-roll clip: scale, crop to 9:16 portrait, trim duration
+        // Video B-roll clip: scale, crop to 9:16 portrait, trim duration, micro-fade
         inputArgs.push('-i', scene.filePath);
         sceneFilterBlocks.push(
-          `[${idx}:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,trim=0:${dur},setpts=PTS-STARTPTS[v${idx}]`
+          `[${idx}:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,trim=0:${dur},setpts=PTS-STARTPTS,` +
+          `fade=t=in:st=0:d=${fadeDur},fade=t=out:st=${safeFadeOutStart}:d=${fadeDur}[v${idx}]`
         );
         concatInputs.push(`[v${idx}]`);
       } else if (scene.type === 'image' && scene.filePath && fs.existsSync(scene.filePath)) {
-        // AI image: apply Ken Burns camera animation (zoompan generates d frames from single image and terminates)
+        // AI image: Ken Burns camera motion + micro-fade
         inputArgs.push('-i', scene.filePath);
         const kbFilter = buildKenBurnsFilter(scene.motionType, dur);
-        sceneFilterBlocks.push(`[${idx}:v]${kbFilter}[v${idx}]`);
+        sceneFilterBlocks.push(
+          `[${idx}:v]${kbFilter},fade=t=in:st=0:d=${fadeDur},fade=t=out:st=${safeFadeOutStart}:d=${fadeDur}[v${idx}]`
+        );
         concatInputs.push(`[v${idx}]`);
       } else {
-        // Fallback procedural for this individual scene
+        // Fallback procedural for this individual scene + micro-fade
         inputArgs.push('-f', 'lavfi', '-t', String(dur), '-i', 'color=c=#0B132B:s=64x64:r=24');
         sceneFilterBlocks.push(
-          `[${idx}:v]format=rgb24,geq=r='20+15*sin(2*PI*(X/64+T/6))':g='22+18*cos(2*PI*(Y/64-T/5))':b='65+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic,format=yuv420p,setsar=1[v${idx}]`
+          `[${idx}:v]format=rgb24,geq=r='20+15*sin(2*PI*(X/64+T/6))':g='22+18*cos(2*PI*(Y/64-T/5))':b='65+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic,format=yuv420p,setsar=1,` +
+          `fade=t=in:st=0:d=${fadeDur},fade=t=out:st=${safeFadeOutStart}:d=${fadeDur}[v${idx}]`
         );
         concatInputs.push(`[v${idx}]`);
       }
@@ -149,30 +156,35 @@ export function buildMultiScenePipeline({
   }
 
   // Common Overlays:
-  // 1. Cinematic dark contrast layer (35% opacity) for subtitle readability
+  // 1. Cinematic dark contrast layer (40% opacity) for subtitle readability
   sceneFilterBlocks.push(
-    `[raw_bg]drawbox=x=0:y=0:w=720:h=1280:color=black@0.35:t=fill[bg]`
+    `[raw_bg]drawbox=x=0:y=0:w=720:h=1280:color=black@0.40:t=fill[bg]`
   );
 
-  // 2. Translucent header badge with neon top accent line
+  // 2. Anti-watermark safety vignette (blanks out bottom 60px where external logos could be placed)
   sceneFilterBlocks.push(
-    `[bg]drawbox=x=60:y=80:w=600:h=85:color=0x111827@0.85:t=fill,drawbox=x=60:y=80:w=600:h=3:color=0x00FF88@1:t=fill[vhdr]`
+    `[bg]drawbox=x=0:y=1220:w=720:h=60:color=black@0.85:t=fill[clean_bg]`
   );
 
-  // 3. Header Title Text
+  // 3. Translucent header badge with neon top accent line
   sceneFilterBlocks.push(
-    `[vhdr]drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=26:x=(w-text_w)/2:y=110:expansion=none[vtxt]`
+    `[clean_bg]drawbox=x=50:y=75:w=620:h=80:color=0x0B0F19@0.85:t=fill,drawbox=x=50:y=75:w=620:h=3:color=0x00FF88@1:t=fill[vhdr]`
   );
 
-  // 4. Dynamic retention progress bar at top of video
+  // 4. Header Title Text
   sceneFilterBlocks.push(
-    `color=c=0x00FF88:s=720x10:r=24[bar]`
+    `[vhdr]drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=24:x=(w-text_w)/2:y=102:expansion=none[vtxt]`
+  );
+
+  // 5. Dynamic retention progress bar at top of video
+  sceneFilterBlocks.push(
+    `color=c=0x00FF88:s=720x8:r=24[bar]`
   );
   sceneFilterBlocks.push(
     `[vtxt][bar]overlay=x='-w+(w/${safeDuration})*t':y=0:shortest=1[vbar]`
   );
 
-  // 5. Kinetic Subtitles overlay
+  // 6. Kinetic Subtitles overlay
   if (assPath && fs.existsSync(assPath)) {
     const escapedAss = escapeFilterPath(assPath);
     sceneFilterBlocks.push(

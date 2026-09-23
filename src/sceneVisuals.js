@@ -12,9 +12,9 @@ import path from 'path';
 
 // Curated high-res vertical (9:16) photography for guaranteed instant fallback
 const CURATED_VERTICAL_FALLBACKS = [
-  'https://images.unsplash.com/photo-1512428559087-560fa5ceab42?auto=format&fit=crop&w=720&h=1280&q=80', // Phone in hand
+  'https://images.unsplash.com/photo-1512428559087-560fa5ceab42?auto=format&fit=crop&w=720&h=1280&q=80', // Smartphone in hand at night
   'https://images.unsplash.com/photo-1556740758-90de374c12ad?auto=format&fit=crop&w=720&h=1280&q=80', // Customer store counter
-  'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=720&h=1280&q=80', // Futuristic AI technology
+  'https://images.unsplash.com/photo-1577563908411-5077b6dc7624?auto=format&fit=crop&w=720&h=1280&q=80', // Smartphone chatting / messaging interface
   'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=720&h=1280&q=80', // Smiling entrepreneur
 ];
 
@@ -35,29 +35,29 @@ export function buildScenePrompts(voiceoverText, rawScenes = []) {
   return [
     {
       title: 'Gancho / Hook',
-      prompt: enrichPrompt('Close up of a smartphone glowing at night in a dark modern office with unread WhatsApp notification messages, dramatic moody lighting, photorealistic, 8k, vertical 9:16 portrait photography'),
-      query: 'smartphone notifications office',
+      prompt: enrichPrompt('Cinematic close-up of a smartphone on a dark executive desk, screen glowing with multiple unread WhatsApp chat notifications, moody neon green accents, photorealistic 8k, vertical 9:16 portrait'),
+      query: 'smartphone unread messages night',
       motionType: 'zoom-in',
       fallbackUrl: CURATED_VERTICAL_FALLBACKS[0],
     },
     {
-      title: 'Problema / Dolor',
-      prompt: enrichPrompt('A frustrated customer turning away from a store counter looking disappointed at phone, dramatic cinematic lighting, photorealistic, 9:16 vertical portrait'),
-      query: 'frustrated customer phone',
+      title: 'Problema / Negocio sin responder',
+      prompt: enrichPrompt('Stressed small business owner at physical retail counter looking frustrated at missed customer sales, dramatic cinematic lighting, photorealistic, 9:16 portrait'),
+      query: 'busy retail store counter',
       motionType: 'pan-down',
       fallbackUrl: CURATED_VERTICAL_FALLBACKS[1],
     },
     {
-      title: 'Solución con IA',
-      prompt: enrichPrompt('Futuristic sleek AI chatbot interface on modern smartphone automatically responding to customer inquiries with emerald green glowing checkmarks, clean tech aesthetic, photorealistic, 9:16 vertical portrait'),
-      query: 'ai technology automation',
+      title: 'Solución con IA (WhatsApp Mockup)',
+      prompt: enrichPrompt('Modern smartphone displaying emerald green WhatsApp chat conversation interface, automated instant AI booking assistant reply with checkmark, ultra crisp UI, 8k, 9:16 vertical'),
+      query: 'mobile app messaging ai interface',
       motionType: 'zoom-out',
       fallbackUrl: CURATED_VERTICAL_FALLBACKS[2],
     },
     {
-      title: 'Cierre y Acción',
-      prompt: enrichPrompt('Successful confident entrepreneur smiling in modern bright sunlit office holding phone as clients book appointments automatically, photorealistic, 9:16 vertical portrait'),
-      query: 'successful business entrepreneur',
+      title: 'Llamado a la Acción / Éxito',
+      prompt: enrichPrompt('Smiling successful entrepreneur working on laptop, relaxed and happy with automatic bookings, bright clean modern office, warm lighting, 9:16 vertical portrait'),
+      query: 'smiling professional entrepreneur',
       motionType: 'pan-right',
       fallbackUrl: CURATED_VERTICAL_FALLBACKS[3],
     },
@@ -76,12 +76,15 @@ function getMotionForIndex(index) {
 
 /**
  * Downloads a vertical 9:16 image generated with Flux (Pollinations)
+ * Strictly removes watermarks and text overlays via negative prompting and API flags.
  */
 async function downloadFluxImage(prompt, outputPath, seed) {
-  const encoded = encodeURIComponent(prompt.slice(0, 260));
-  const url = `https://image.pollinations.ai/prompt/${encoded}?width=720&height=1280&nologo=true&model=flux&seed=${seed}`;
+  const cleanPrompt = encodeURIComponent(
+    `${prompt}, no watermarks, no text overlays, clean composition`.slice(0, 280)
+  );
+  const url = `https://image.pollinations.ai/prompt/${cleanPrompt}?width=720&height=1280&nologo=true&private=true&enhance=false&model=flux&seed=${seed}`;
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
   if (!res.ok) {
     throw new Error(`Flux HTTP ${res.status}`);
   }
