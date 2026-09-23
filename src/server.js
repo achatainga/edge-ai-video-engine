@@ -158,25 +158,23 @@ app.post('/render-video', async (req, res) => {
       // 3. Render 9:16 Vertical Video with FFmpeg
       console.log(`[Render ${renderId}] 2/4 Compiling 9:16 vertical video with FFmpeg...`);
       
-      // Escape paths for FFmpeg filter
+      // Escape title and subtitle path for FFmpeg
+      const safeTitle = (title || 'Video Promocional').replace(/[':\\]/g, ' ');
       const escapedSrtPath = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
 
-      // Creates a stylish 9:16 vertical motion background (1080x1920)
-      // with subtle animated gradient and styled subtitle captions
-      const subtitleFilter = fs.existsSync(srtPath)
-        ? `,subtitles='${escapedSrtPath}':force_style='FontName=DejaVu Sans,FontSize=22,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BackColour=&H80000000,Bold=1,Alignment=2,MarginV=140'`
-        : '';
+      const filterGraph = fs.existsSync(srtPath)
+        ? `[0:v]drawbox=x=80:y=180:w=920:h=120:color=cyan@0.15:t=fill,drawtext=text='${safeTitle}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=220:bold=1,subtitles='${escapedSrtPath}':force_style='FontName=DejaVu Sans,FontSize=22,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BackColour=&H80000000,Bold=1,Alignment=2,MarginV=140'[outv]`
+        : `[0:v]drawbox=x=80:y=180:w=920:h=120:color=cyan@0.15:t=fill,drawtext=text='${safeTitle}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=220:bold=1[outv]`;
 
       const ffmpegCmd = [
         '-f', 'lavfi',
         '-i', 'color=c=#0B132B:s=1080x1920:r=30',
         '-i', audioPath,
-        '-filter_complex',
-        `"[0:v]geq=r='X/W*50+20':g='Y/H*80+30':b='120+sin(T)*30'[bg];[bg]drawbox=x=80:y=180:w=920:h=120:color=#00E5FF@0.2:t=fill,drawtext=text='${title.replace(/'/g, "\\'")}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=220:bold=1${subtitleFilter}[outv]"`,
+        '-filter_complex', filterGraph,
         '-map', '[outv]',
         '-map', '1:a',
         '-c:v', 'libx264',
-        '-preset', 'fast',
+        '-preset', 'ultrafast',
         '-pix_fmt', 'yuv420p',
         '-c:a', 'aac',
         '-b:a', '128k',
