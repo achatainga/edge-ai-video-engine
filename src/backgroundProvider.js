@@ -114,9 +114,9 @@ export function buildFilterGraph({
       `[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,drawbox=x=0:y=0:w=720:h=1280:color=black@0.55:t=fill[bg]`
     );
   } else {
-    // Ultra-lightweight procedural gradient mesh. Note: FFmpeg geq uses uppercase T for timestamp
+    // Ultra-lightweight procedural gradient mesh in RGB space, then scaled bicubic and converted to YUV420p
     filters.push(
-      `[0:v]geq=r='15+15*sin(2*PI*(X/64+T/6))':g='10+20*cos(2*PI*(Y/64-T/5))':b='45+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic[bg]`
+      `[0:v]format=rgb24,geq=r='20+15*sin(2*PI*(X/64+T/6))':g='22+18*cos(2*PI*(Y/64-T/5))':b='65+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic,format=yuv420p[bg]`
     );
   }
 
