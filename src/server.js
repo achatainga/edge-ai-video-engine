@@ -1,6 +1,7 @@
 /**
  * Edge Video Engine (Render Cloud Microservice)
  * 100% Free Video Rendering with FFmpeg, Edge-TTS, and Evolution API WhatsApp Dispatch
+ * Redesigned for High Retention (Kinetic ASS Subtitles, Procedural Ambient Motion, Progress Bar)
  */
 
 import express from 'express';
@@ -9,6 +10,9 @@ import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+
+import { convertVttToDynamicAss } from './subtitleGenerator.js';
+import { buildFilterGraph, fetchPexelsBroll, resolveBestFont } from './backgroundProvider.js';
 
 process.on('uncaughtException', (err) => console.error('[FATAL] Uncaught Exception:', err));
 process.on('unhandledRejection', (reason) => console.error('[FATAL] Unhandled Rejection:', reason));
@@ -46,6 +50,20 @@ setInterval(() => {
 }, 600 * 1000);
 
 /**
+ * Helper: Probe audio duration in seconds
+ */
+async function probeAudioDuration(audioPath) {
+  try {
+    const { stdout } = await execAsync(
+      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`
+    );
+    const d = parseFloat(stdout.trim());
+    if (!isNaN(d) && d > 0) return d;
+  } catch {}
+  return 30;
+}
+
+/**
  * Health check endpoint
  */
 app.get('/health', async (req, res) => {
@@ -62,11 +80,14 @@ app.get('/health', async (req, res) => {
     edgeTtsInstalled = stdout.length > 0;
   } catch {}
 
+  const bestFont = resolveBestFont();
+
   res.json({
     status: 'ok',
     service: 'edge-video-engine',
     ffmpeg: ffmpegInstalled,
     edgeTts: edgeTtsInstalled,
+    activeFont: bestFont,
     timestamp: new Date().toISOString(),
   });
 });
@@ -80,7 +101,7 @@ app.get('/diag', async (req, res) => {
     const { stdout: ffmpegVersion } = await execAsync('ffmpeg -version');
     let fontsList = [];
     if (fs.existsSync('/usr/share/fonts')) {
-      fontsList = fs.readdirSync('/usr/share/fonts', { recursive: true }).slice(0, 30);
+      fontsList = fs.readdirSync('/usr/share/fonts', { recursive: true }).slice(0, 40);
     }
 
     res.json({
@@ -88,6 +109,7 @@ app.get('/diag', async (req, res) => {
       hasSubtitles: ffmpegFilters.includes('subtitles'),
       hasDrawtext: ffmpegFilters.includes('drawtext'),
       hasDrawbox: ffmpegFilters.includes('drawbox'),
+      bestFont: resolveBestFont(),
       version: ffmpegVersion.split('\n')[0],
       fonts: fontsList,
     });
@@ -125,39 +147,43 @@ app.get('/test-render', async (req, res) => {
 });
 
 /**
- * Full End-to-End Test probe: TTS + Subtitles + Video compilation
+ * Full End-to-End Test probe: TTS + Kinetic ASS Subtitles + Animated Background
  */
 app.get('/test-full', async (req, res) => {
   const testDir = path.join('/tmp', `test-${Date.now()}`);
   fs.mkdirSync(testDir, { recursive: true });
   const audio = path.join(testDir, 'a.mp3');
   const vtt = path.join(testDir, 's.vtt');
-  const srt = path.join(testDir, 's.srt');
+  const ass = path.join(testDir, 's.ass');
   const out = path.join(PUBLIC_DIR, 'test_full.mp4');
 
   try {
     const t0 = Date.now();
-    await execAsync(`edge-tts --voice "es-VE-SebastianNeural" --text "Prueba de video con Inteligencia Artificial." --write-media "${audio}" --write-subtitles "${vtt}"`);
-    const srtData = vttToSrt(fs.readFileSync(vtt, 'utf-8'));
-    fs.writeFileSync(srt, srtData, 'utf-8');
+    await execAsync(`edge-tts --voice "es-VE-SebastianNeural" --text "Prueba de alta retención. Tu WhatsApp responde clientes al instante con Inteligencia Artificial." --write-media "${audio}" --write-subtitles "${vtt}"`);
 
-    const dejavuBold = '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf';
-    const fontFileOpt = fs.existsSync(dejavuBold) ? `:fontfile=${dejavuBold}` : '';
-    const escapedSrt = srt.replace(/\\/g, '/').replace(/:/g, '\\:');
+    const bestFont = resolveBestFont();
+    const assContent = convertVttToDynamicAss(fs.readFileSync(vtt, 'utf-8'), bestFont.name);
+    fs.writeFileSync(ass, assContent, 'utf-8');
 
-    const filterGraph = `[0:v]drawbox=x=40:y=120:w=640:h=90:color=cyan@0.18:t=fill,drawtext=text='Video Demo'${fontFileOpt}:fontcolor=white:fontsize=28:x=(w-text_w)/2:y=155:expansion=none,subtitles='${escapedSrt}':force_style='FontName=DejaVu Sans,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=120'[outv]`;
+    const duration = await probeAudioDuration(audio);
+    const filterGraph = buildFilterGraph({
+      title: 'Demo Alta Retención',
+      totalDuration: duration,
+      assPath: ass,
+    });
 
     const ffmpegCmd = [
       '-y',
       '-threads', '2',
       '-f', 'lavfi',
-      '-i', 'color=c=#0B132B:s=720x1280:r=30',
+      '-i', 'color=c=#0B132B:s=64x64:r=24',
       '-i', audio,
       '-filter_complex', filterGraph,
       '-map', '[outv]',
       '-map', '1:a',
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
+      '-tune', 'fastdecode',
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
       '-b:a', '128k',
@@ -168,59 +194,19 @@ app.get('/test-full', async (req, res) => {
     await execFileAsync('ffmpeg', ffmpegCmd);
     const durationMs = Date.now() - t0;
     const size = fs.existsSync(out) ? fs.statSync(out).size : 0;
-    res.json({ success: true, durationMs, size, outUrl: `https://edge-ai-video-engine.onrender.com/videos/test_full.mp4` });
+    res.json({
+      success: true,
+      durationMs,
+      size,
+      activeFont: bestFont,
+      outUrl: `https://edge-ai-video-engine.onrender.com/videos/test_full.mp4`
+    });
   } catch (err) {
     res.status(500).json({ error: err.message, stack: err.stack, stderr: err.stderr });
   } finally {
     try { fs.rmSync(testDir, { recursive: true, force: true }); } catch {}
   }
 });
-
-/**
- * Helper: formats VTT timestamps (HH:MM:SS.mmm or MM:SS.mmm) into SRT format (HH:MM:SS,mmm)
- */
-function formatSrtTimestamp(ts) {
-  const parts = ts.trim().split(':');
-  if (parts.length === 2) {
-    return '00:' + parts[0].padStart(2, '0') + ':' + parts[1].replace('.', ',');
-  } else if (parts.length === 3) {
-    return parts[0].padStart(2, '0') + ':' + parts[1].padStart(2, '0') + ':' + parts[2].replace('.', ',');
-  }
-  return ts.replace('.', ',');
-}
-
-/**
- * Helper: converts VTT subtitles to SRT format for FFmpeg compatibility
- */
-function vttToSrt(vttContent) {
-  const lines = vttContent.replace(/\r\n/g, '\n').split('\n');
-  const srtLines = [];
-  let counter = 1;
-  let inCue = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (line.includes('-->')) {
-      inCue = true;
-      srtLines.push(String(counter++));
-      const times = line.split('-->');
-      if (times.length === 2) {
-        const start = formatSrtTimestamp(times[0].trim());
-        const endPart = times[1].trim().split(/\s+/)[0];
-        const end = formatSrtTimestamp(endPart);
-        srtLines.push(`${start} --> ${end}`);
-      } else {
-        srtLines.push(line.replace(/\./g, ','));
-      }
-    } else if (inCue && line === '') {
-      inCue = false;
-      srtLines.push('');
-    } else if (inCue && !line.startsWith('NOTE') && !line.startsWith('STYLE')) {
-      srtLines.push(line);
-    }
-  }
-  return srtLines.join('\n');
-}
 
 /**
  * Main Video Render Endpoint
@@ -230,7 +216,7 @@ app.post('/render-video', async (req, res) => {
   const {
     title = 'Video Promocional con IA',
     voiceoverText,
-    voiceName = 'es-VE-SebastianNeural', // Excellent Spanish neural voice
+    voiceName = 'es-VE-SebastianNeural',
     scenes = [],
     recipientPhone,
     evolutionUrl,
@@ -254,24 +240,23 @@ app.post('/render-video', async (req, res) => {
   const scriptPath = path.join(workDir, 'script.txt');
   const audioPath = path.join(workDir, 'speech.mp3');
   const vttPath = path.join(workDir, 'subtitles.vtt');
-  const srtPath = path.join(workDir, 'subtitles.srt');
+  const assPath = path.join(workDir, 'subtitles.ass');
   const outputFileName = `reel_${renderId}.mp4`;
   const outputPath = path.join(PUBLIC_DIR, outputFileName);
 
-  console.log(`[Render ${renderId}] Starting video production for ${recipientPhone}...`);
+  console.log(`[Render ${renderId}] Starting high-retention video production for ${recipientPhone}...`);
 
-  // Run in background and respond 202 Accepted so caller doesn't timeout
+  // Run asynchronously and respond 202 Accepted immediately
   res.status(202).json({
     status: 'processing',
     renderId,
-    message: 'Video rendering queued successfully in Render cloud.',
+    message: 'High-retention video rendering queued successfully in Render cloud.',
   });
 
   (async () => {
     try {
       // 1. Synthesize neural voice and subtitles using edge-tts
       console.log(`[Render ${renderId}] 1/4 Synthesizing voice with Edge-TTS (${voiceName})...`);
-      // Clean emojis and symbols for speech synthesis
       const cleanVoiceover = voiceoverText
         .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
         .trim();
@@ -281,36 +266,40 @@ app.post('/render-video', async (req, res) => {
         `edge-tts --voice "${voiceName}" -f "${scriptPath}" --write-media "${audioPath}" --write-subtitles "${vttPath}"`
       );
 
-      // 2. Convert subtitles to SRT
+      // 2. Generate Kinetic ASS Subtitles
+      console.log(`[Render ${renderId}] 2/4 Converting VTT to Kinetic ASS Subtitles...`);
+      const bestFont = resolveBestFont();
       if (fs.existsSync(vttPath)) {
         const vttData = fs.readFileSync(vttPath, 'utf-8');
-        const srtData = vttToSrt(vttData);
-        fs.writeFileSync(srtPath, srtData, 'utf-8');
+        const assData = convertVttToDynamicAss(vttData, bestFont.name);
+        fs.writeFileSync(assPath, assData, 'utf-8');
       }
 
-      // 3. Render 9:16 Vertical Video with FFmpeg
-      console.log(`[Render ${renderId}] 2/4 Compiling 9:16 vertical video with FFmpeg...`);
-      
-      // Escape title and subtitle path for FFmpeg
-      const safeTitle = (title || 'Video Promocional').replace(/[':\\]/g, ' ').trim();
-      const escapedSrtPath = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      // 3. Audio duration & optional Pexels B-roll
+      const totalDuration = await probeAudioDuration(audioPath);
+      let brollVideoPath = null;
+      if (scenes && scenes.length > 0) {
+        const query = scenes[0].visualPrompt || scenes[0].title || 'business phone technology';
+        brollVideoPath = await fetchPexelsBroll(query, workDir);
+      }
 
-      // Check available fonts
-      const dejavuBold = '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf';
-      const dejavuRegular = '/usr/share/fonts/dejavu/DejaVuSans.ttf';
-      const fontFileOpt = fs.existsSync(dejavuBold)
-        ? `:fontfile=${dejavuBold}`
-        : (fs.existsSync(dejavuRegular) ? `:fontfile=${dejavuRegular}` : '');
+      // 4. Build FilterGraph & Compile 9:16 Vertical Video with FFmpeg
+      console.log(`[Render ${renderId}] 3/4 Compiling 9:16 vertical video with FFmpeg...`);
+      const filterGraph = buildFilterGraph({
+        title,
+        totalDuration,
+        assPath: fs.existsSync(assPath) ? assPath : null,
+        brollVideoPath,
+      });
 
-      const filterGraph = fs.existsSync(srtPath)
-        ? `[0:v]drawbox=x=40:y=120:w=640:h=90:color=cyan@0.18:t=fill,drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=28:x=(w-text_w)/2:y=155:expansion=none,subtitles='${escapedSrtPath}':force_style='FontName=DejaVu Sans,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=120'[outv]`
-        : `[0:v]drawbox=x=40:y=120:w=640:h=90:color=cyan@0.18:t=fill,drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=28:x=(w-text_w)/2:y=155:expansion=none[outv]`;
+      const inputArgs = brollVideoPath
+        ? ['-stream_loop', '-1', '-i', brollVideoPath]
+        : ['-f', 'lavfi', '-i', 'color=c=#0B132B:s=64x64:r=24'];
 
       const ffmpegCmd = [
         '-y',
         '-threads', '1',
-        '-f', 'lavfi',
-        '-i', 'color=c=#0B132B:s=720x1280:r=24',
+        ...inputArgs,
         '-i', audioPath,
         '-filter_complex', filterGraph,
         '-map', '[outv]',
@@ -350,9 +339,9 @@ app.post('/render-video', async (req, res) => {
           fbProc.on('error', reject);
         });
       });
-      console.log(`[Render ${renderId}] 3/4 Video compiled successfully: ${outputPath}`);
+      console.log(`[Render ${renderId}] Video compiled successfully: ${outputPath}`);
 
-      // 4. Send video to WhatsApp via Evolution API
+      // 5. Send video to WhatsApp via Evolution API
       if (evolutionUrl && evolutionApiKey && recipientPhone) {
         console.log(`[Render ${renderId}] 4/4 Dispatching video to WhatsApp (+${recipientPhone})...`);
         const cleanBaseUrl = evolutionUrl.replace(/\/+$/, '');
@@ -366,7 +355,7 @@ app.post('/render-video', async (req, res) => {
           (socialCopy ? `${socialCopy}\n\n` : '') +
           (hashtags.length ? `${hashtags.join(' ')}\n\n` : '') +
           `🔗 *Descarga directa (HD):* ${downloadUrl}\n\n` +
-          `✨ *Video generado 100% con IA a costo $0* listo para descargar y subir a Instagram Reels o TikTok.`;
+          `✨ *Video de alta retención generado 100% con IA a costo $0* con subtítulos cinéticos, barra de progreso y diseño dinámico.`;
 
         const sendMediaUrl = `${cleanBaseUrl}/message/sendMedia/${evolutionInstance}`;
         const evoRes = await fetch(sendMediaUrl, {
