@@ -195,12 +195,13 @@ app.post('/render-video', async (req, res) => {
         : (fs.existsSync(dejavuRegular) ? `:fontfile=${dejavuRegular}` : '');
 
       const filterGraph = fs.existsSync(srtPath)
-        ? `[0:v]drawbox=x=60:y=180:w=960:h=130:color=cyan@0.18:t=fill,drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=38:x=(w-text_w)/2:y=225:expansion=none,subtitles='${escapedSrtPath}':force_style='FontName=DejaVu Sans,FontSize=24,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=180'[outv]`
-        : `[0:v]drawbox=x=60:y=180:w=960:h=130:color=cyan@0.18:t=fill,drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=38:x=(w-text_w)/2:y=225:expansion=none[outv]`;
+        ? `[0:v]drawbox=x=40:y=120:w=640:h=90:color=cyan@0.18:t=fill,drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=28:x=(w-text_w)/2:y=155:expansion=none,subtitles='${escapedSrtPath}':force_style='FontName=DejaVu Sans,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=120'[outv]`
+        : `[0:v]drawbox=x=40:y=120:w=640:h=90:color=cyan@0.18:t=fill,drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=28:x=(w-text_w)/2:y=155:expansion=none[outv]`;
 
       const ffmpegCmd = [
+        '-threads', '2',
         '-f', 'lavfi',
-        '-i', 'color=c=#0B132B:s=1080x1920:r=30',
+        '-i', 'color=c=#0B132B:s=720x1280:r=30',
         '-i', audioPath,
         '-filter_complex', filterGraph,
         '-map', '[outv]',
@@ -226,10 +227,6 @@ app.post('/render-video', async (req, res) => {
         const engineBaseUrl = appOrigin || process.env.RENDER_EXTERNAL_URL || 'https://edge-ai-video-engine.onrender.com';
         const downloadUrl = `${engineBaseUrl.replace(/\/+$/, '')}/videos/${outputFileName}`;
 
-        // Read video buffer as base64 for reliable direct transfer
-        const videoBuffer = fs.readFileSync(outputPath);
-        const base64Data = videoBuffer.toString('base64');
-
         const captionText =
           `🎬 *${title}*\n\n` +
           (socialCopy ? `${socialCopy}\n\n` : '') +
@@ -249,7 +246,7 @@ app.post('/render-video', async (req, res) => {
             mediatype: 'video',
             mimetype: 'video/mp4',
             caption: captionText,
-            media: `data:video/mp4;base64,${base64Data}`,
+            media: downloadUrl,
             fileName: `${title.replace(/[^a-zA-Z0-9]/g, '_')}.mp4`,
           }),
         });
