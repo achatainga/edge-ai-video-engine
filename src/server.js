@@ -308,15 +308,16 @@ app.post('/render-video', async (req, res) => {
 
       const ffmpegCmd = [
         '-y',
-        '-threads', '2',
+        '-threads', '1',
         '-f', 'lavfi',
-        '-i', 'color=c=#0B132B:s=720x1280:r=30',
+        '-i', 'color=c=#0B132B:s=720x1280:r=24',
         '-i', audioPath,
         '-filter_complex', filterGraph,
         '-map', '[outv]',
         '-map', '1:a',
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
+        '-tune', 'fastdecode',
         '-pix_fmt', 'yuv420p',
         '-c:a', 'aac',
         '-b:a', '128k',
@@ -325,7 +326,7 @@ app.post('/render-video', async (req, res) => {
       ];
 
       await new Promise((resolve, reject) => {
-        const proc = spawn('ffmpeg', ffmpegCmd);
+        const proc = spawn('nice', ['-n', '19', 'ffmpeg', ...ffmpegCmd]);
         let lastErr = '';
         proc.stderr.on('data', (d) => {
           const msg = d.toString();
@@ -343,8 +344,10 @@ app.post('/render-video', async (req, res) => {
           }
         });
         proc.on('error', (err) => {
-          console.error(`[Render ${renderId} FFmpeg Process Error]:`, err);
-          reject(err);
+          console.warn(`[Render ${renderId}] nice invocation failed, spawning ffmpeg directly:`, err.message);
+          const fbProc = spawn('ffmpeg', ffmpegCmd);
+          fbProc.on('close', (c) => (c === 0 ? resolve() : reject(new Error(`FFmpeg code ${c}`))));
+          fbProc.on('error', reject);
         });
       });
       console.log(`[Render ${renderId}] 3/4 Video compiled successfully: ${outputPath}`);
