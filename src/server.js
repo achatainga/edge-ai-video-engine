@@ -204,7 +204,7 @@ app.get('/test-full', async (req, res) => {
 
   try {
     const t0 = Date.now();
-    await execAsync(`edge-tts --voice "es-VE-SebastianNeural" --text "Prueba cinemática. Tu WhatsApp responde clientes al instante con Inteligencia Artificial." --write-media "${audio}" --write-subtitles "${vtt}"`);
+    await execAsync(`edge-tts --rate="+18%" --voice "es-VE-SebastianNeural" --text "Prueba cinemática. Tu WhatsApp responde clientes al instante con Inteligencia Artificial." --write-media "${audio}" --write-subtitles "${vtt}"`);
 
     const bestFont = resolveBestFont();
     const assContent = convertVttToDynamicAss(fs.readFileSync(vtt, 'utf-8'), bestFont.name);
@@ -324,7 +324,7 @@ app.post('/render-video', async (req, res) => {
       fs.writeFileSync(scriptPath, cleanVoiceover, 'utf-8');
 
       await execAsync(
-        `edge-tts --voice "${voiceName}" -f "${scriptPath}" --write-media "${audioPath}" --write-subtitles "${vttPath}"`
+        `edge-tts --rate="+18%" --voice "${voiceName}" -f "${scriptPath}" --write-media "${audioPath}" --write-subtitles "${vttPath}"`
       );
 
       // 2. Generate Kinetic ASS Subtitles

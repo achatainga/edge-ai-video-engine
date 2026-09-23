@@ -103,8 +103,51 @@ function formatChunkText(words) {
   return `{\\c${COLOR_WHITE}}` + formattedWords.join(' ');
 }
 
+// Accent badge definitions (Layer 2 Editorial Cards in upper third inspired by reels-af)
+const ACCENT_TRIGGERS = [
+  { test: /\b(WHATSAPP)\b/i, badge: '⚡ WHATSAPP CON IA' },
+  { test: /\b(CLIENTES?|VENTAS?|COMPETENCIA|PIERDAS?)\b/i, badge: '🚨 NO PIERDAS CLIENTES' },
+  { test: /\b(INSTANTE|SEGUNDOS?|R[AÁ]PIDO)\b/i, badge: '⏱️ RESPUESTA EN SEGUNDOS' },
+  { test: /\b(CITAS?|AGENDA|RESERVAS?)\b/i, badge: '📅 AGENDAMIENTO AUTOMÁTICO' },
+  { test: /\b(GRATIS|0\$|\$0)\b/i, badge: '🎁 PRUEBA 100% GRATIS' },
+  { test: /\b(EDGE\s*AI|SOLUCIONES?)\b/i, badge: '🚀 EDGE AI SOLUCIONES' },
+  { test: /\b(DUERMES?|AUTOM[AÁ]TICO)\b/i, badge: '🤖 PILOTO AUTOMÁTICO 24/7' },
+];
+
+function buildAccentEvents(cues) {
+  const accentEvents = [];
+  let lastAccentEnd = -10;
+
+  for (const cue of cues) {
+    if (cue.startSec - lastAccentEnd < 2.5) continue;
+
+    for (const rule of ACCENT_TRIGGERS) {
+      if (rule.test.test(cue.text)) {
+        const start = cue.startSec;
+        const dur = Math.min(3.0, Math.max(1.8, cue.endSec - cue.startSec + 0.5));
+        const end = start + dur;
+
+        const assStart = formatAssTime(start);
+        const assEnd = formatAssTime(end);
+
+        // Layer 1, Top-Center (Alignment 8) in upper third
+        accentEvents.push(
+          `Dialogue: 1,${assStart},${assEnd},Accent,,0,0,0,,{\\b1}${rule.badge}`
+        );
+        lastAccentEnd = end;
+        break;
+      }
+    }
+  }
+
+  return accentEvents;
+}
+
 /**
  * Converts standard VTT subtitle content into an Advanced SubStation Alpha (.ass) script
+ * Features:
+ * - Layer 0: Kinetic word-burst subtitles at bottom-center (Alignment 2, MarginV=280)
+ * - Layer 1: Uppercase editorial accent cards at top-center (Alignment 8, MarginV=210)
  */
 export function convertVttToDynamicAss(vttContent, fontName = 'Montserrat Black') {
   const lines = vttContent.replace(/\r\n/g, '\n').split('\n');
@@ -132,7 +175,7 @@ export function convertVttToDynamicAss(vttContent, fontName = 'Montserrat Black'
     cues.push(currentCue);
   }
 
-  // Build ASS dialogue events
+  // Build Layer 0 ASS dialogue events (Kinetic Subtitles)
   const dialogueEvents = [];
 
   for (const cue of cues) {
@@ -165,6 +208,10 @@ export function convertVttToDynamicAss(vttContent, fontName = 'Montserrat Black'
     }
   }
 
+  // Build Layer 1 ASS dialogue events (Editorial Accent Badges in upper third)
+  const accentEvents = buildAccentEvents(cues);
+  const allEvents = dialogueEvents.concat(accentEvents);
+
   // Assemble full ASS document
   return `[Script Info]
 ScriptType: v4.00+
@@ -176,9 +223,10 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Kinetic,${fontName},44,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,4.5,2,2,40,40,280,1
+Style: Accent,${fontName},32,&H0000FF88,&H000000FF,&H00000000,&HB00B0F19,-1,0,0,0,100,100,2,0,1,3.5,0,8,40,40,210,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-${dialogueEvents.join('\n')}
+${allEvents.join('\n')}
 `;
 }
