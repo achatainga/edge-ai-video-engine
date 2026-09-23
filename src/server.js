@@ -147,6 +147,38 @@ app.get('/test-render', async (req, res) => {
 });
 
 /**
+ * Frame extraction probe (returns a JPEG snapshot of any rendered video)
+ */
+app.get('/frame/:videoName/:sec', async (req, res) => {
+  const { videoName, sec } = req.params;
+  const safeVideoName = path.basename(videoName);
+  const videoPath = path.join(PUBLIC_DIR, safeVideoName);
+  const framePath = path.join(PUBLIC_DIR, `${safeVideoName}_${sec}s.jpg`);
+
+  if (!fs.existsSync(videoPath)) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+
+  try {
+    if (!fs.existsSync(framePath)) {
+      const cleanSec = parseFloat(sec) || 1;
+      await execFileAsync('ffmpeg', [
+        '-y',
+        '-ss', String(cleanSec),
+        '-i', videoPath,
+        '-vframes', '1',
+        '-q:v', '2',
+        framePath
+      ]);
+    }
+    res.setHeader('Content-Type', 'image/jpeg');
+    fs.createReadStream(framePath).pipe(res);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * Full End-to-End Test probe: TTS + Kinetic ASS Subtitles + Animated Background
  */
 app.get('/test-full', async (req, res) => {
