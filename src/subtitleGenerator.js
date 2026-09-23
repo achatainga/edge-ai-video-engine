@@ -152,7 +152,7 @@ function buildAccentEvents(cues) {
 /**
  * Converts standard VTT subtitle content into an Advanced SubStation Alpha (.ass) script
  * Features:
- * - Layer 0: Kinetic word-burst subtitles at lower-middle focal zone (Alignment 2, MarginV=480, Fontsize=60)
+ * - Layer 0: Kinetic word-burst subtitles at middle of screen (Alignment 2, MarginV=600, Fontsize=60)
  * - Layer 1: Uppercase editorial accent cards at top-center (Alignment 8, MarginV=210, Fontsize=36)
  */
 export function convertVttToDynamicAss(vttContent, fontName = 'Montserrat Black') {
@@ -228,7 +228,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Kinetic,${fontName},60,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,5.5,2.5,2,40,40,480,1
+Style: Kinetic,${fontName},60,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,5.5,2.5,2,40,40,600,1
 Style: Accent,${fontName},36,&H0000FF88,&H000000FF,&H00000000,&HB00B0F19,-1,0,0,0,100,100,2,0,1,4.0,0,8,40,40,210,1
 
 [Events]
