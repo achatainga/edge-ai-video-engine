@@ -125,6 +125,58 @@ app.get('/test-render', async (req, res) => {
 });
 
 /**
+ * Full End-to-End Test probe: TTS + Subtitles + Video compilation
+ */
+app.get('/test-full', async (req, res) => {
+  const testDir = path.join('/tmp', `test-${Date.now()}`);
+  fs.mkdirSync(testDir, { recursive: true });
+  const audio = path.join(testDir, 'a.mp3');
+  const vtt = path.join(testDir, 's.vtt');
+  const srt = path.join(testDir, 's.srt');
+  const out = path.join(PUBLIC_DIR, 'test_full.mp4');
+
+  try {
+    const t0 = Date.now();
+    await execAsync(`edge-tts --voice "es-VE-SebastianNeural" --text "Prueba de video con Inteligencia Artificial." --write-media "${audio}" --write-subtitles "${vtt}"`);
+    const srtData = vttToSrt(fs.readFileSync(vtt, 'utf-8'));
+    fs.writeFileSync(srt, srtData, 'utf-8');
+
+    const dejavuBold = '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf';
+    const fontFileOpt = fs.existsSync(dejavuBold) ? `:fontfile=${dejavuBold}` : '';
+    const escapedSrt = srt.replace(/\\/g, '/').replace(/:/g, '\\:');
+
+    const filterGraph = `[0:v]drawbox=x=40:y=120:w=640:h=90:color=cyan@0.18:t=fill,drawtext=text='Video Demo'${fontFileOpt}:fontcolor=white:fontsize=28:x=(w-text_w)/2:y=155:expansion=none,subtitles='${escapedSrt}':force_style='FontName=DejaVu Sans,FontSize=18,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=120'[outv]`;
+
+    const ffmpegCmd = [
+      '-y',
+      '-threads', '2',
+      '-f', 'lavfi',
+      '-i', 'color=c=#0B132B:s=720x1280:r=30',
+      '-i', audio,
+      '-filter_complex', filterGraph,
+      '-map', '[outv]',
+      '-map', '1:a',
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-shortest',
+      out
+    ];
+
+    await execFileAsync('ffmpeg', ffmpegCmd);
+    const durationMs = Date.now() - t0;
+    const size = fs.existsSync(out) ? fs.statSync(out).size : 0;
+    res.json({ success: true, durationMs, size, outUrl: `https://edge-ai-video-engine.onrender.com/videos/test_full.mp4` });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack, stderr: err.stderr });
+  } finally {
+    try { fs.rmSync(testDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+/**
  * Helper: formats VTT timestamps (HH:MM:SS.mmm or MM:SS.mmm) into SRT format (HH:MM:SS,mmm)
  */
 function formatSrtTimestamp(ts) {
@@ -244,8 +296,8 @@ app.post('/render-video', async (req, res) => {
       const escapedSrtPath = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
 
       // Check available fonts
-      const dejavuBold = '/usr/share/fonts/ttf-dejavu/DejaVuSans-Bold.ttf';
-      const dejavuRegular = '/usr/share/fonts/ttf-dejavu/DejaVuSans.ttf';
+      const dejavuBold = '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf';
+      const dejavuRegular = '/usr/share/fonts/dejavu/DejaVuSans.ttf';
       const fontFileOpt = fs.existsSync(dejavuBold)
         ? `:fontfile=${dejavuBold}`
         : (fs.existsSync(dejavuRegular) ? `:fontfile=${dejavuRegular}` : '');
