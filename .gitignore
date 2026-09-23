@@ -2,3 +2,5 @@ node_modules/
 /tmp/
 .env
 .DS_Store
+*.mp4
+*.jpg
