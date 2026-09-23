@@ -69,6 +69,19 @@ app.get('/health', async (req, res) => {
 });
 
 /**
+ * Helper: formats VTT timestamps (HH:MM:SS.mmm or MM:SS.mmm) into SRT format (HH:MM:SS,mmm)
+ */
+function formatSrtTimestamp(ts) {
+  const parts = ts.trim().split(':');
+  if (parts.length === 2) {
+    return '00:' + parts[0].padStart(2, '0') + ':' + parts[1].replace('.', ',');
+  } else if (parts.length === 3) {
+    return parts[0].padStart(2, '0') + ':' + parts[1].padStart(2, '0') + ':' + parts[2].replace('.', ',');
+  }
+  return ts.replace('.', ',');
+}
+
+/**
  * Helper: converts VTT subtitles to SRT format for FFmpeg compatibility
  */
 function vttToSrt(vttContent) {
@@ -82,13 +95,19 @@ function vttToSrt(vttContent) {
     if (line.includes('-->')) {
       inCue = true;
       srtLines.push(String(counter++));
-      // Replace dot milliseconds with comma for SRT
-      const srtTime = line.replace(/(\d{2}:\d{2}\.\d{3})/g, '00:$1').replace(/\./g, ',');
-      srtLines.push(srtTime);
+      const times = line.split('-->');
+      if (times.length === 2) {
+        const start = formatSrtTimestamp(times[0].trim());
+        const endPart = times[1].trim().split(/\s+/)[0];
+        const end = formatSrtTimestamp(endPart);
+        srtLines.push(`${start} --> ${end}`);
+      } else {
+        srtLines.push(line.replace(/\./g, ','));
+      }
     } else if (inCue && line === '') {
       inCue = false;
       srtLines.push('');
-    } else if (inCue) {
+    } else if (inCue && !line.startsWith('NOTE') && !line.startsWith('STYLE')) {
       srtLines.push(line);
     }
   }
@@ -124,6 +143,7 @@ app.post('/render-video', async (req, res) => {
   const workDir = path.join('/tmp', `render-${renderId}`);
   fs.mkdirSync(workDir, { recursive: true });
 
+  const scriptPath = path.join(workDir, 'script.txt');
   const audioPath = path.join(workDir, 'speech.mp3');
   const vttPath = path.join(workDir, 'subtitles.vtt');
   const srtPath = path.join(workDir, 'subtitles.srt');
@@ -143,9 +163,14 @@ app.post('/render-video', async (req, res) => {
     try {
       // 1. Synthesize neural voice and subtitles using edge-tts
       console.log(`[Render ${renderId}] 1/4 Synthesizing voice with Edge-TTS (${voiceName})...`);
-      const cleanVoiceover = voiceoverText.replace(/"/g, '\\"');
+      // Clean emojis and symbols for speech synthesis
+      const cleanVoiceover = voiceoverText
+        .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
+        .trim();
+      fs.writeFileSync(scriptPath, cleanVoiceover, 'utf-8');
+
       await execAsync(
-        `edge-tts --voice "${voiceName}" --text "${cleanVoiceover}" --write-media "${audioPath}" --write-subtitles "${vttPath}"`
+        `edge-tts --voice "${voiceName}" -f "${scriptPath}" --write-media "${audioPath}" --write-subtitles "${vttPath}"`
       );
 
       // 2. Convert subtitles to SRT
@@ -159,12 +184,19 @@ app.post('/render-video', async (req, res) => {
       console.log(`[Render ${renderId}] 2/4 Compiling 9:16 vertical video with FFmpeg...`);
       
       // Escape title and subtitle path for FFmpeg
-      const safeTitle = (title || 'Video Promocional').replace(/[':\\]/g, ' ');
+      const safeTitle = (title || 'Video Promocional').replace(/[':\\]/g, ' ').trim();
       const escapedSrtPath = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
 
+      // Check available fonts
+      const dejavuBold = '/usr/share/fonts/ttf-dejavu/DejaVuSans-Bold.ttf';
+      const dejavuRegular = '/usr/share/fonts/ttf-dejavu/DejaVuSans.ttf';
+      const fontFileOpt = fs.existsSync(dejavuBold)
+        ? `:fontfile=${dejavuBold}`
+        : (fs.existsSync(dejavuRegular) ? `:fontfile=${dejavuRegular}` : '');
+
       const filterGraph = fs.existsSync(srtPath)
-        ? `[0:v]drawbox=x=80:y=180:w=920:h=120:color=cyan@0.15:t=fill,drawtext=text='${safeTitle}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=220:bold=1,subtitles='${escapedSrtPath}':force_style='FontName=DejaVu Sans,FontSize=22,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BackColour=&H80000000,Bold=1,Alignment=2,MarginV=140'[outv]`
-        : `[0:v]drawbox=x=80:y=180:w=920:h=120:color=cyan@0.15:t=fill,drawtext=text='${safeTitle}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=220:bold=1[outv]`;
+        ? `[0:v]drawbox=x=60:y=180:w=960:h=130:color=cyan@0.18:t=fill,drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=38:x=(w-text_w)/2:y=225:expansion=none,subtitles='${escapedSrtPath}':force_style='FontName=DejaVu Sans,FontSize=24,PrimaryColour=&H00FFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=180'[outv]`
+        : `[0:v]drawbox=x=60:y=180:w=960:h=130:color=cyan@0.18:t=fill,drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=38:x=(w-text_w)/2:y=225:expansion=none[outv]`;
 
       const ffmpegCmd = [
         '-f', 'lavfi',
@@ -191,6 +223,9 @@ app.post('/render-video', async (req, res) => {
         const cleanBaseUrl = evolutionUrl.replace(/\/+$/, '');
         const cleanPhone = recipientPhone.replace(/[^0-9]/g, '');
 
+        const engineBaseUrl = appOrigin || process.env.RENDER_EXTERNAL_URL || 'https://edge-ai-video-engine.onrender.com';
+        const downloadUrl = `${engineBaseUrl.replace(/\/+$/, '')}/videos/${outputFileName}`;
+
         // Read video buffer as base64 for reliable direct transfer
         const videoBuffer = fs.readFileSync(outputPath);
         const base64Data = videoBuffer.toString('base64');
@@ -199,6 +234,7 @@ app.post('/render-video', async (req, res) => {
           `🎬 *${title}*\n\n` +
           (socialCopy ? `${socialCopy}\n\n` : '') +
           (hashtags.length ? `${hashtags.join(' ')}\n\n` : '') +
+          `🔗 *Descarga directa (HD):* ${downloadUrl}\n\n` +
           `✨ *Video generado 100% con IA a costo $0* listo para descargar y subir a Instagram Reels o TikTok.`;
 
         const sendMediaUrl = `${cleanBaseUrl}/message/sendMedia/${evolutionInstance}`;

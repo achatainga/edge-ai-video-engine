@@ -1,8 +1,9 @@
 FROM node:20-alpine
 
-# Install system dependencies: FFmpeg, Python3, Pip, and rich TrueType fonts for video subtitles
+# Install system dependencies: FFmpeg, Fontconfig, Python3, Pip, and rich TrueType fonts for video subtitles
 RUN apk add --no-cache \
     ffmpeg \
+    fontconfig \
     python3 \
     py3-pip \
     font-noto \
