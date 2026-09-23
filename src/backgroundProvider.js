@@ -112,35 +112,28 @@ export function buildMultiScenePipeline({
       `[0:v]format=rgb24,geq=r='20+15*sin(2*PI*(X/64+T/6))':g='22+18*cos(2*PI*(Y/64-T/5))':b='65+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic,format=yuv420p,setsar=1[raw_bg]`
     );
   } else {
-    // Multi-scene Ken Burns & B-roll assembly with micro-fades
-    const fadeDur = 0.25;
-
+    // Multi-scene Ken Burns & B-roll assembly
     validScenes.forEach((scene, idx) => {
       const dur = Math.max(1, Number(scene.durationSec) || 4);
-      const safeFadeOutStart = Math.max(0, dur - fadeDur);
 
       if (scene.type === 'video' && scene.filePath && fs.existsSync(scene.filePath)) {
-        // Video B-roll clip: scale, crop to 9:16 portrait, trim duration, micro-fade
+        // Video B-roll clip: scale, crop to 9:16 portrait, trim duration
         inputArgs.push('-i', scene.filePath);
         sceneFilterBlocks.push(
-          `[${idx}:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,trim=0:${dur},setpts=PTS-STARTPTS,` +
-          `fade=t=in:st=0:d=${fadeDur},fade=t=out:st=${safeFadeOutStart}:d=${fadeDur}[v${idx}]`
+          `[${idx}:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,trim=0:${dur},setpts=PTS-STARTPTS[v${idx}]`
         );
         concatInputs.push(`[v${idx}]`);
       } else if (scene.type === 'image' && scene.filePath && fs.existsSync(scene.filePath)) {
-        // AI image: Ken Burns camera motion + micro-fade
+        // AI image: Ken Burns camera motion (zoom-in, pan-down, zoom-out, pan-right)
         inputArgs.push('-i', scene.filePath);
         const kbFilter = buildKenBurnsFilter(scene.motionType, dur);
-        sceneFilterBlocks.push(
-          `[${idx}:v]${kbFilter},fade=t=in:st=0:d=${fadeDur},fade=t=out:st=${safeFadeOutStart}:d=${fadeDur}[v${idx}]`
-        );
+        sceneFilterBlocks.push(`[${idx}:v]${kbFilter}[v${idx}]`);
         concatInputs.push(`[v${idx}]`);
       } else {
-        // Fallback procedural for this individual scene + micro-fade
+        // Fallback procedural for this individual scene
         inputArgs.push('-f', 'lavfi', '-t', String(dur), '-i', 'color=c=#0B132B:s=64x64:r=24');
         sceneFilterBlocks.push(
-          `[${idx}:v]format=rgb24,geq=r='20+15*sin(2*PI*(X/64+T/6))':g='22+18*cos(2*PI*(Y/64-T/5))':b='65+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic,format=yuv420p,setsar=1,` +
-          `fade=t=in:st=0:d=${fadeDur},fade=t=out:st=${safeFadeOutStart}:d=${fadeDur}[v${idx}]`
+          `[${idx}:v]format=rgb24,geq=r='20+15*sin(2*PI*(X/64+T/6))':g='22+18*cos(2*PI*(Y/64-T/5))':b='65+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic,format=yuv420p,setsar=1[v${idx}]`
         );
         concatInputs.push(`[v${idx}]`);
       }

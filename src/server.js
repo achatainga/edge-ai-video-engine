@@ -173,10 +173,21 @@ app.get('/frame/:videoName/:sec', async (req, res) => {
         framePath
       ]);
     }
+
+    if (!fs.existsSync(framePath) || fs.statSync(framePath).size === 0) {
+      return res.status(404).json({ error: `Frame at ${sec}s could not be extracted (timestamp exceeds video duration).` });
+    }
+
     res.setHeader('Content-Type', 'image/jpeg');
-    fs.createReadStream(framePath).pipe(res);
+    const stream = fs.createReadStream(framePath);
+    stream.on('error', (err) => {
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+    });
+    stream.pipe(res);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 
