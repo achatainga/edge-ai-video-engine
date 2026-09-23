@@ -1,10 +1,10 @@
 /**
  * backgroundProvider.js
  * Generates dynamic, high-retention visual backgrounds and overlay filters for FFmpeg.
- * - Ultra-lightweight procedural animated gradient mesh (64x64 upscaled bicubic to 720x1280, <2s render time on 0.1 CPU).
+ * - Ultra-lightweight procedural animated gradient mesh (64x64 math scaled to 720x1280 bicubic, <2s render time on 0.1 CPU).
  * - Optional Pexels B-roll vertical video downloader if PEXELS_API_KEY is available.
- * - Dynamic retention progress bar at top of video.
- * - Modern translucent header card badge.
+ * - Dynamic retention progress bar at top of video using color + overlay.
+ * - Modern translucent header card badge with top accent.
  */
 
 import fs from 'fs';
@@ -73,7 +73,6 @@ export async function fetchPexelsBroll(query, targetDir) {
     const data = await res.json();
     if (!data.videos || data.videos.length === 0) return null;
 
-    // Pick first video with suitable vertical dimensions
     const video = data.videos[0];
     const verticalFile = video.video_files.find(f => f.height > f.width && f.quality === 'hd') 
       || video.video_files.find(f => f.height > f.width)
@@ -111,14 +110,13 @@ export function buildFilterGraph({
   const filters = [];
 
   if (brollVideoPath && fs.existsSync(brollVideoPath)) {
-    // Input 0 is the B-roll video, looped and scaled to 9:16 portrait with dark readability tint
     filters.push(
       `[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,drawbox=x=0:y=0:w=720:h=1280:color=black@0.55:t=fill[bg]`
     );
   } else {
-    // Ultra-lightweight living procedural gradient (64x64 math scaled to 720x1280 bicubic)
+    // Ultra-lightweight procedural gradient mesh. Note: FFmpeg geq uses uppercase T for timestamp
     filters.push(
-      `[0:v]geq=r='15+15*sin(2*PI*(X/64+t/6))':g='10+20*cos(2*PI*(Y/64-t/5))':b='45+35*sin(2*PI*(X/64+Y/64+t/7))',scale=720:1280:flags=bicubic[bg]`
+      `[0:v]geq=r='15+15*sin(2*PI*(X/64+T/6))':g='10+20*cos(2*PI*(Y/64-T/5))':b='45+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic[bg]`
     );
   }
 
@@ -132,9 +130,12 @@ export function buildFilterGraph({
     `[vhdr]drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=26:x=(w-text_w)/2:y=110:expansion=none[vtxt]`
   );
 
-  // Retention Progress Bar: Neon lime bar animating from 0% to 100% width across duration
+  // Retention Progress Bar: Color source overlaid at top with x moving from -w to 0 based on time t
   filters.push(
-    `[vtxt]drawbox=x=0:y=0:w='w*(t/${safeDuration})':h=10:color=0x00FF88@1:t=fill[vbar]`
+    `color=c=0x00FF88:s=720x10:r=24[bar]`
+  );
+  filters.push(
+    `[vtxt][bar]overlay=x='-w+(w/${safeDuration})*t':y=0:shortest=1[vbar]`
   );
 
   // Subtitles overlay: Libass renderer using the dynamic kinetic ASS file
