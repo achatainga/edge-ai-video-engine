@@ -13,7 +13,7 @@ import path from 'path';
 // Curated high-res vertical (9:16) photography for guaranteed instant fallback
 const CURATED_VERTICAL_FALLBACKS = [
   'https://images.unsplash.com/photo-1512428559087-560fa5ceab42?auto=format&fit=crop&w=720&h=1280&q=80', // Phone in hand
-  'https://images.unsplash.com/photo-1556742049-0a67e55722c3?auto=format&fit=crop&w=720&h=1280&q=80', // Customer store counter
+  'https://images.unsplash.com/photo-1556740758-90de374c12ad?auto=format&fit=crop&w=720&h=1280&q=80', // Customer store counter
   'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=720&h=1280&q=80', // Futuristic AI technology
   'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=720&h=1280&q=80', // Smiling entrepreneur
 ];

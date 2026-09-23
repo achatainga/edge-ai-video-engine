@@ -124,8 +124,8 @@ export function buildMultiScenePipeline({
         );
         concatInputs.push(`[v${idx}]`);
       } else if (scene.type === 'image' && scene.filePath && fs.existsSync(scene.filePath)) {
-        // AI image: apply Ken Burns camera animation
-        inputArgs.push('-loop', '1', '-t', String(dur), '-i', scene.filePath);
+        // AI image: apply Ken Burns camera animation (zoompan generates d frames from single image and terminates)
+        inputArgs.push('-i', scene.filePath);
         const kbFilter = buildKenBurnsFilter(scene.motionType, dur);
         sceneFilterBlocks.push(`[${idx}:v]${kbFilter}[v${idx}]`);
         concatInputs.push(`[v${idx}]`);
