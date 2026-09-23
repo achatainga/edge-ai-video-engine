@@ -49,16 +49,21 @@ export function parseVttTimestamp(ts) {
 }
 
 /**
- * Splits an array of words into compact 2-3 word chunks
+ * Splits an array of words into compact 1-2 word kinetic bursts (Alex Hormozi / Reels style)
  */
-export function chunkWords(words, maxWordsPerChunk = 3) {
+export function chunkWords(words, maxWordsPerChunk = 2) {
   const chunks = [];
   let i = 0;
   while (i < words.length) {
     const remaining = words.length - i;
-    if (remaining === 4) {
-      chunks.push(words.slice(i, i + 2));
-      chunks.push(words.slice(i + 2, i + 4));
+    if (remaining === 3) {
+      const len3 = words.slice(i).join(' ').length;
+      if (len3 <= 14) {
+        chunks.push(words.slice(i, i + 3));
+      } else {
+        chunks.push(words.slice(i, i + 2));
+        chunks.push(words.slice(i + 2, i + 3));
+      }
       break;
     }
     const take = Math.min(maxWordsPerChunk, remaining);
@@ -147,8 +152,8 @@ function buildAccentEvents(cues) {
 /**
  * Converts standard VTT subtitle content into an Advanced SubStation Alpha (.ass) script
  * Features:
- * - Layer 0: Kinetic word-burst subtitles at bottom-center (Alignment 2, MarginV=280)
- * - Layer 1: Uppercase editorial accent cards at top-center (Alignment 8, MarginV=210)
+ * - Layer 0: Kinetic word-burst subtitles at lower-middle focal zone (Alignment 2, MarginV=480, Fontsize=60)
+ * - Layer 1: Uppercase editorial accent cards at top-center (Alignment 8, MarginV=210, Fontsize=36)
  */
 export function convertVttToDynamicAss(vttContent, fontName = 'Montserrat Black') {
   const lines = vttContent.replace(/\r\n/g, '\n').split('\n');
@@ -223,8 +228,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Kinetic,${fontName},44,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,4.5,2,2,40,40,280,1
-Style: Accent,${fontName},32,&H0000FF88,&H000000FF,&H00000000,&HB00B0F19,-1,0,0,0,100,100,2,0,1,3.5,0,8,40,40,210,1
+Style: Kinetic,${fontName},60,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,5.5,2.5,2,40,40,480,1
+Style: Accent,${fontName},36,&H0000FF88,&H000000FF,&H00000000,&HB00B0F19,-1,0,0,0,100,100,2,0,1,4.0,0,8,40,40,210,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
