@@ -104,14 +104,15 @@ function formatChunkText(words) {
 }
 
 // Accent badge definitions (Layer 2 Editorial Cards in upper third inspired by reels-af)
+// Clean typography without 4-byte SMP emojis to ensure 100% font compatibility in libass with Montserrat
 const ACCENT_TRIGGERS = [
-  { test: /\b(WHATSAPP)\b/i, badge: '⚡ WHATSAPP CON IA' },
-  { test: /\b(CLIENTES?|VENTAS?|COMPETENCIA|PIERDAS?)\b/i, badge: '🚨 NO PIERDAS CLIENTES' },
-  { test: /\b(INSTANTE|SEGUNDOS?|R[AÁ]PIDO)\b/i, badge: '⏱️ RESPUESTA EN SEGUNDOS' },
-  { test: /\b(CITAS?|AGENDA|RESERVAS?)\b/i, badge: '📅 AGENDAMIENTO AUTOMÁTICO' },
-  { test: /\b(GRATIS|0\$|\$0)\b/i, badge: '🎁 PRUEBA 100% GRATIS' },
-  { test: /\b(EDGE\s*AI|SOLUCIONES?)\b/i, badge: '🚀 EDGE AI SOLUCIONES' },
-  { test: /\b(DUERMES?|AUTOM[AÁ]TICO)\b/i, badge: '🤖 PILOTO AUTOMÁTICO 24/7' },
+  { test: /\b(WHATSAPP)\b/i, badge: 'WHATSAPP CON IA' },
+  { test: /\b(CLIENTES?|VENTAS?|COMPETENCIA|PIERDAS?)\b/i, badge: 'NO PIERDAS CLIENTES' },
+  { test: /\b(INSTANTE|SEGUNDOS?|R[AÁ]PIDO)\b/i, badge: 'RESPUESTA EN 3 SEGUNDOS' },
+  { test: /\b(CITAS?|AGENDA|RESERVAS?)\b/i, badge: 'AGENDAMIENTO AUTOMÁTICO' },
+  { test: /\b(GRATIS|0\$|\$0)\b/i, badge: 'PRUEBA 100% GRATIS' },
+  { test: /\b(EDGE\s*AI|SOLUCIONES?)\b/i, badge: 'EDGE AI SOLUCIONES' },
+  { test: /\b(DUERMES?|AUTOM[AÁ]TICO)\b/i, badge: 'PILOTO AUTOMÁTICO 24/7' },
 ];
 
 function buildAccentEvents(cues) {
@@ -132,7 +133,7 @@ function buildAccentEvents(cues) {
 
         // Layer 1, Top-Center (Alignment 8) in upper third
         accentEvents.push(
-          `Dialogue: 1,${assStart},${assEnd},Accent,,0,0,0,,{\\b1}${rule.badge}`
+          `Dialogue: 1,${assStart},${assEnd},Accent,,0,0,0,,{\\b1}[ ${rule.badge} ]`
         );
         lastAccentEnd = end;
         break;
