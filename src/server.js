@@ -4,11 +4,14 @@
  */
 
 import express from 'express';
-import { exec, execFile } from 'child_process';
+import { exec, execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+
+process.on('uncaughtException', (err) => console.error('[FATAL] Uncaught Exception:', err));
+process.on('unhandledRejection', (reason) => console.error('[FATAL] Unhandled Rejection:', reason));
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -66,6 +69,59 @@ app.get('/health', async (req, res) => {
     edgeTts: edgeTtsInstalled,
     timestamp: new Date().toISOString(),
   });
+});
+
+/**
+ * Diagnostic probe to inspect filters, fonts, and environment
+ */
+app.get('/diag', async (req, res) => {
+  try {
+    const { stdout: ffmpegFilters } = await execAsync('ffmpeg -filters');
+    const { stdout: ffmpegVersion } = await execAsync('ffmpeg -version');
+    let fontsList = [];
+    if (fs.existsSync('/usr/share/fonts')) {
+      fontsList = fs.readdirSync('/usr/share/fonts', { recursive: true }).slice(0, 30);
+    }
+
+    res.json({
+      status: 'ok',
+      hasSubtitles: ffmpegFilters.includes('subtitles'),
+      hasDrawtext: ffmpegFilters.includes('drawtext'),
+      hasDrawbox: ffmpegFilters.includes('drawbox'),
+      version: ffmpegVersion.split('\n')[0],
+      fonts: fontsList,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Test render probe (2-second synthetic video)
+ */
+app.get('/test-render', async (req, res) => {
+  const testOutput = path.join(PUBLIC_DIR, 'probe_test.mp4');
+  try {
+    const args = [
+      '-y',
+      '-threads', '2',
+      '-f', 'lavfi',
+      '-i', 'color=c=#0B132B:s=720x1280:d=2:r=30',
+      '-f', 'lavfi',
+      '-i', 'anullsrc=r=44100:cl=stereo',
+      '-t', '2',
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      testOutput
+    ];
+    const { stdout, stderr } = await execAsync(`ffmpeg ${args.join(' ')}`);
+    const size = fs.existsSync(testOutput) ? fs.statSync(testOutput).size : 0;
+    res.json({ success: true, size, stdout, stderr });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stderr: err.stderr, stdout: err.stdout });
+  }
 });
 
 /**
@@ -199,6 +255,7 @@ app.post('/render-video', async (req, res) => {
         : `[0:v]drawbox=x=40:y=120:w=640:h=90:color=cyan@0.18:t=fill,drawtext=text='${safeTitle}'${fontFileOpt}:fontcolor=white:fontsize=28:x=(w-text_w)/2:y=155:expansion=none[outv]`;
 
       const ffmpegCmd = [
+        '-y',
         '-threads', '2',
         '-f', 'lavfi',
         '-i', 'color=c=#0B132B:s=720x1280:r=30',
@@ -215,7 +272,29 @@ app.post('/render-video', async (req, res) => {
         outputPath
       ];
 
-      await execFileAsync('ffmpeg', ffmpegCmd);
+      await new Promise((resolve, reject) => {
+        const proc = spawn('ffmpeg', ffmpegCmd);
+        let lastErr = '';
+        proc.stderr.on('data', (d) => {
+          const msg = d.toString();
+          lastErr = msg;
+          if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('failed') || msg.includes('Cannot')) {
+            console.error(`[Render ${renderId} FFmpeg Err]:`, msg.trim());
+          }
+        });
+        proc.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            console.error(`[Render ${renderId} FFmpeg Exit ${code}]:`, lastErr.trim());
+            reject(new Error(`FFmpeg exited with code ${code}`));
+          }
+        });
+        proc.on('error', (err) => {
+          console.error(`[Render ${renderId} FFmpeg Process Error]:`, err);
+          reject(err);
+        });
+      });
       console.log(`[Render ${renderId}] 3/4 Video compiled successfully: ${outputPath}`);
 
       // 4. Send video to WhatsApp via Evolution API
