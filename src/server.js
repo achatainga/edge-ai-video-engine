@@ -1,7 +1,7 @@
 /**
  * Edge Video Engine (Render Cloud Microservice)
  * 100% Free Video Rendering with FFmpeg, Edge-TTS, and Evolution API WhatsApp Dispatch
- * Redesigned for High Retention (Kinetic ASS Subtitles, Procedural Ambient Motion, Progress Bar)
+ * High-Retention Hybrid AI Visual Engine (Flux 9:16 AI Generation + Ken Burns Motion + Pexels B-Roll)
  */
 
 import express from 'express';
@@ -12,7 +12,8 @@ import path from 'path';
 import crypto from 'crypto';
 
 import { convertVttToDynamicAss } from './subtitleGenerator.js';
-import { buildFilterGraph, fetchPexelsBroll, resolveBestFont } from './backgroundProvider.js';
+import { buildMultiScenePipeline, resolveBestFont } from './backgroundProvider.js';
+import { prepareSceneAssets } from './sceneVisuals.js';
 
 process.on('uncaughtException', (err) => console.error('[FATAL] Uncaught Exception:', err));
 process.on('unhandledRejection', (reason) => console.error('[FATAL] Unhandled Rejection:', reason));
@@ -107,6 +108,7 @@ app.get('/diag', async (req, res) => {
     res.json({
       status: 'ok',
       hasSubtitles: ffmpegFilters.includes('subtitles'),
+      hasZoompan: ffmpegFilters.includes('zoompan'),
       hasDrawtext: ffmpegFilters.includes('drawtext'),
       hasDrawbox: ffmpegFilters.includes('drawbox'),
       bestFont: resolveBestFont(),
@@ -179,7 +181,7 @@ app.get('/frame/:videoName/:sec', async (req, res) => {
 });
 
 /**
- * Full End-to-End Test probe: TTS + Kinetic ASS Subtitles + Animated Background
+ * Full End-to-End Test probe: TTS + Multi-Scene Ken Burns Motion + Kinetic ASS Subtitles
  */
 app.get('/test-full', async (req, res) => {
   const testDir = path.join('/tmp', `test-${Date.now()}`);
@@ -191,28 +193,39 @@ app.get('/test-full', async (req, res) => {
 
   try {
     const t0 = Date.now();
-    await execAsync(`edge-tts --voice "es-VE-SebastianNeural" --text "Prueba de alta retención. Tu WhatsApp responde clientes al instante con Inteligencia Artificial." --write-media "${audio}" --write-subtitles "${vtt}"`);
+    await execAsync(`edge-tts --voice "es-VE-SebastianNeural" --text "Prueba cinemática. Tu WhatsApp responde clientes al instante con Inteligencia Artificial." --write-media "${audio}" --write-subtitles "${vtt}"`);
 
     const bestFont = resolveBestFont();
     const assContent = convertVttToDynamicAss(fs.readFileSync(vtt, 'utf-8'), bestFont.name);
     fs.writeFileSync(ass, assContent, 'utf-8');
 
     const duration = await probeAudioDuration(audio);
-    const filterGraph = buildFilterGraph({
-      title: 'Demo Alta Retención',
+
+    // Prepare multi-scene visual assets (Flux 9:16 + Ken Burns)
+    const visualScenes = await prepareSceneAssets({
+      voiceoverText: "Prueba cinemática. Tu WhatsApp responde clientes al instante con Inteligencia Artificial.",
+      rawScenes: [],
+      totalDuration: duration,
+      workDir: testDir,
+    });
+
+    const { inputArgs, filterGraph } = buildMultiScenePipeline({
+      scenes: visualScenes,
+      title: 'Demo Cinemática IA',
       totalDuration: duration,
       assPath: ass,
     });
 
+    const numVideoInputs = inputArgs.filter(arg => arg === '-i').length;
+
     const ffmpegCmd = [
       '-y',
       '-threads', '2',
-      '-f', 'lavfi',
-      '-i', 'color=c=#0B132B:s=64x64:r=24',
+      ...inputArgs,
       '-i', audio,
       '-filter_complex', filterGraph,
       '-map', '[outv]',
-      '-map', '1:a',
+      '-map', `${numVideoInputs}:a`,
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-tune', 'fastdecode',
@@ -230,6 +243,7 @@ app.get('/test-full', async (req, res) => {
       success: true,
       durationMs,
       size,
+      sceneCount: visualScenes.length,
       activeFont: bestFont,
       outUrl: `https://edge-ai-video-engine.onrender.com/videos/test_full.mp4`
     });
@@ -276,13 +290,13 @@ app.post('/render-video', async (req, res) => {
   const outputFileName = `reel_${renderId}.mp4`;
   const outputPath = path.join(PUBLIC_DIR, outputFileName);
 
-  console.log(`[Render ${renderId}] Starting high-retention video production for ${recipientPhone}...`);
+  console.log(`[Render ${renderId}] Starting cinematic AI video production for ${recipientPhone}...`);
 
   // Run asynchronously and respond 202 Accepted immediately
   res.status(202).json({
     status: 'processing',
     renderId,
-    message: 'High-retention video rendering queued successfully in Render cloud.',
+    message: 'Cinematic AI video rendering queued successfully in Render cloud.',
   });
 
   (async () => {
@@ -307,26 +321,26 @@ app.post('/render-video', async (req, res) => {
         fs.writeFileSync(assPath, assData, 'utf-8');
       }
 
-      // 3. Audio duration & optional Pexels B-roll
+      // 3. Audio duration & Multi-scene asset sourcing (Flux AI + Pexels B-roll)
       const totalDuration = await probeAudioDuration(audioPath);
-      let brollVideoPath = null;
-      if (scenes && scenes.length > 0) {
-        const query = scenes[0].visualPrompt || scenes[0].title || 'business phone technology';
-        brollVideoPath = await fetchPexelsBroll(query, workDir);
-      }
+      console.log(`[Render ${renderId}] 3/4 Sourcing multi-scene visual assets (Duration: ${totalDuration}s)...`);
+      const visualScenes = await prepareSceneAssets({
+        voiceoverText,
+        rawScenes: scenes,
+        totalDuration,
+        workDir,
+      });
 
-      // 4. Build FilterGraph & Compile 9:16 Vertical Video with FFmpeg
-      console.log(`[Render ${renderId}] 3/4 Compiling 9:16 vertical video with FFmpeg...`);
-      const filterGraph = buildFilterGraph({
+      // 4. Build Multi-Scene FilterGraph with Ken Burns & Compile with FFmpeg
+      console.log(`[Render ${renderId}] 4/5 Compiling cinematic 9:16 vertical video with FFmpeg...`);
+      const { inputArgs, filterGraph } = buildMultiScenePipeline({
+        scenes: visualScenes,
         title,
         totalDuration,
         assPath: fs.existsSync(assPath) ? assPath : null,
-        brollVideoPath,
       });
 
-      const inputArgs = brollVideoPath
-        ? ['-stream_loop', '-1', '-i', brollVideoPath]
-        : ['-f', 'lavfi', '-i', 'color=c=#0B132B:s=64x64:r=24'];
+      const numVideoInputs = inputArgs.filter(arg => arg === '-i').length;
 
       const ffmpegCmd = [
         '-y',
@@ -335,7 +349,7 @@ app.post('/render-video', async (req, res) => {
         '-i', audioPath,
         '-filter_complex', filterGraph,
         '-map', '[outv]',
-        '-map', '1:a',
+        '-map', `${numVideoInputs}:a`,
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-tune', 'fastdecode',
@@ -371,11 +385,11 @@ app.post('/render-video', async (req, res) => {
           fbProc.on('error', reject);
         });
       });
-      console.log(`[Render ${renderId}] Video compiled successfully: ${outputPath}`);
+      console.log(`[Render ${renderId}] Cinematic video compiled successfully: ${outputPath}`);
 
       // 5. Send video to WhatsApp via Evolution API
       if (evolutionUrl && evolutionApiKey && recipientPhone) {
-        console.log(`[Render ${renderId}] 4/4 Dispatching video to WhatsApp (+${recipientPhone})...`);
+        console.log(`[Render ${renderId}] 5/5 Dispatching cinematic video to WhatsApp (+${recipientPhone})...`);
         const cleanBaseUrl = evolutionUrl.replace(/\/+$/, '');
         const cleanPhone = recipientPhone.replace(/[^0-9]/g, '');
 
@@ -387,7 +401,7 @@ app.post('/render-video', async (req, res) => {
           (socialCopy ? `${socialCopy}\n\n` : '') +
           (hashtags.length ? `${hashtags.join(' ')}\n\n` : '') +
           `🔗 *Descarga directa (HD):* ${downloadUrl}\n\n` +
-          `✨ *Video de alta retención generado 100% con IA a costo $0* con subtítulos cinéticos, barra de progreso y diseño dinámico.`;
+          `✨ *Video cinemático con IA (Flux 9:16 + Ken Burns + Subtítulos)* a costo $0 listo para publicar en Instagram Reels o TikTok.`;
 
         const sendMediaUrl = `${cleanBaseUrl}/message/sendMedia/${evolutionInstance}`;
         const evoRes = await fetch(sendMediaUrl, {
@@ -407,7 +421,7 @@ app.post('/render-video', async (req, res) => {
         });
 
         if (evoRes.ok) {
-          console.log(`[Render ${renderId}] ✅ Video dispatched to WhatsApp successfully!`);
+          console.log(`[Render ${renderId}] ✅ Cinematic video dispatched to WhatsApp successfully!`);
         } else {
           const errText = await evoRes.text().catch(() => '');
           console.warn(`[Render ${renderId}] ⚠️ Evolution API sendMedia returned HTTP ${evoRes.status}:`, errText);
