@@ -14,7 +14,7 @@ import path from 'path';
 const CURATED_VERTICAL_FALLBACKS = [
   'https://images.unsplash.com/photo-1512428559087-560fa5ceab42?auto=format&fit=crop&w=720&h=1280&q=80', // Smartphone in hand at night
   'https://images.unsplash.com/photo-1556740758-90de374c12ad?auto=format&fit=crop&w=720&h=1280&q=80', // Customer store counter
-  'https://images.unsplash.com/photo-1577563908411-5077b6dc7624?auto=format&fit=crop&w=720&h=1280&q=80', // Smartphone chatting / messaging interface
+  'https://images.unsplash.com/photo-1556656793-08538906a9f8?auto=format&fit=crop&w=720&h=1280&q=80', // Modern smartphone tech interface
   'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=720&h=1280&q=80', // Smiling entrepreneur
 ];
 
@@ -211,10 +211,11 @@ export async function prepareSceneAssets({
           motionType: cfg.motionType,
         });
         assetReady = true;
-        // Small delay between Flux requests to prevent 429 rate limit
-        await new Promise(r => setTimeout(r, 1000));
       } catch (err) {
         console.warn(`[SceneVisuals] Scene ${idx} Flux error (${err.message}), using curated vertical HD asset`);
+      } finally {
+        // Pacing delay between Flux requests to prevent 429 rate limit
+        await new Promise(r => setTimeout(r, 1200));
       }
     }
 

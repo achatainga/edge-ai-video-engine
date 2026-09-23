@@ -154,9 +154,9 @@ export function buildMultiScenePipeline({
     `[raw_bg]drawbox=x=0:y=0:w=720:h=1280:color=black@0.40:t=fill[bg]`
   );
 
-  // 2. Anti-watermark safety vignette (blanks out bottom 60px where external logos could be placed)
+  // 2. Anti-watermark safety vignette (blanks out bottom 95px so no watermark or logo is ever visible)
   sceneFilterBlocks.push(
-    `[bg]drawbox=x=0:y=1220:w=720:h=60:color=black@0.85:t=fill[clean_bg]`
+    `[bg]drawbox=x=0:y=1185:w=720:h=95:color=black@0.95:t=fill[clean_bg]`
   );
 
   // 3. Translucent header badge with neon top accent line
