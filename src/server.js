@@ -1,26 +1,20 @@
 /**
- * Edge Video Engine (Render Cloud Microservice)
- * 100% Free Video Rendering with FFmpeg, Edge-TTS, and Evolution API WhatsApp Dispatch
- * High-Retention Hybrid AI Visual Engine (Flux 9:16 AI Generation + Ken Burns Motion + Pexels B-Roll)
+ * Edge AI Video Engine (Render Cloud Microservice)
+ * Frugal In-Memory Video Rendering Engine with @napi-rs/canvas, Ken Burns,
+ * Kinetic Captions, Audio Ducking, and Evolution API WhatsApp Dispatch.
  */
 
 import express from 'express';
-import { exec, execFile, spawn } from 'child_process';
+import PQueue from 'p-queue';
+import { z } from 'zod';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-
-import { convertVttToDynamicAss } from './subtitleGenerator.js';
-import { buildMultiScenePipeline, resolveBestFont } from './backgroundProvider.js';
-import { prepareSceneAssets } from './sceneVisuals.js';
-
-process.on('uncaughtException', (err) => console.error('[FATAL] Uncaught Exception:', err));
-process.on('unhandledRejection', (reason) => console.error('[FATAL] Unhandled Rejection:', reason));
+import { composeVideoToBuffer } from './composer.js';
 
 const execAsync = promisify(exec);
-const execFileAsync = promisify(execFile);
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -33,7 +27,7 @@ if (!fs.existsSync(PUBLIC_DIR)) {
 }
 app.use('/videos', express.static(PUBLIC_DIR));
 
-// Clean up videos older than 1 hour periodically
+// Clean up videos older than 1 hour periodically to preserve disk space
 setInterval(() => {
   try {
     const files = fs.readdirSync(PUBLIC_DIR);
@@ -50,24 +44,135 @@ setInterval(() => {
   }
 }, 600 * 1000);
 
+// Single-Lane Worker Queue: strictly concurrency 1 to prevent OOM Kill 137 under 512MB RAM
+const renderQueue = new PQueue({ concurrency: 1 });
+
+const RenderVideoSchema = z.object({
+  title: z.string().min(1).default('Video Promocional con IA'),
+  voiceoverText: z.string().min(1),
+  recipientPhone: z.string().min(7),
+  evolutionUrl: z.string().optional(),
+  evolutionApiKey: z.string().optional(),
+  evolutionInstance: z.string().default('default'),
+  socialCopy: z.string().optional().default(''),
+  hashtags: z.array(z.string()).optional().default([]),
+  visualStoryboard: z.array(z.any()).optional().default([]),
+  kineticCaptions: z.array(z.any()).optional().default([]),
+  subtitles: z.array(z.any()).optional().default([]),
+  audioConfig: z
+    .object({
+      voiceoverLoudness: z
+        .object({
+          targetLufs: z.number().default(-14),
+          maxTruePeak: z.number().default(-1.0),
+          loudnessRange: z.number().default(7.0),
+        })
+        .default({ targetLufs: -14, maxTruePeak: -1.0, loudnessRange: 7.0 }),
+      musicDucking: z
+        .object({
+          duckingDb: z.number().default(-18),
+          attackMs: z.number().default(150),
+          releaseMs: z.number().default(350),
+          voiceHoldMs: z.number().default(400),
+        })
+        .default({ duckingDb: -18, attackMs: 150, releaseMs: 350, voiceHoldMs: 400 }),
+      backgroundMusicGenre: z.string().default('modern_ambient_lofi'),
+    })
+    .default({
+      voiceoverLoudness: { targetLufs: -14, maxTruePeak: -1.0, loudnessRange: 7.0 },
+      musicDucking: { duckingDb: -18, attackMs: 150, releaseMs: 350, voiceHoldMs: 400 },
+      backgroundMusicGenre: 'modern_ambient_lofi',
+    }),
+  renderProfile: z.any().optional(),
+});
+
 /**
- * Helper: Probe audio duration in seconds
+ * Generates synthetic voiceover tone as a fallback when Edge-TTS CLI is not installed
  */
-async function probeAudioDuration(audioPath) {
+function generateSyntheticVoiceTone(text) {
+  const words = text.trim().split(/\s+/).length;
+  const durationSec = Math.max(5, Math.min(45, Math.ceil(words / 2.5)));
+  const sampleRate = 44100;
+  const numSamples = sampleRate * durationSec;
+  const pcmBuffer = Buffer.alloc(numSamples * 2);
+
+  for (let i = 0; i < numSamples; i++) {
+    const t = i / sampleRate;
+    const sample = Math.sin(2 * Math.PI * 440 * t) * 0.15;
+    pcmBuffer.writeInt16LE(Math.floor(sample * 32767), i * 2);
+  }
+
+  const wavHeader = Buffer.alloc(44);
+  wavHeader.write('RIFF', 0);
+  wavHeader.writeUInt32LE(36 + pcmBuffer.length, 4);
+  wavHeader.write('WAVE', 8);
+  wavHeader.write('fmt ', 12);
+  wavHeader.writeUInt32LE(16, 16);
+  wavHeader.writeUInt16LE(1, 20); // PCM
+  wavHeader.writeUInt16LE(1, 22); // Mono
+  wavHeader.writeUInt32LE(sampleRate, 24);
+  wavHeader.writeUInt32LE(sampleRate * 2, 28);
+  wavHeader.writeUInt16LE(2, 32);
+  wavHeader.writeUInt16LE(16, 34);
+  wavHeader.write('data', 36);
+  wavHeader.writeUInt32LE(pcmBuffer.length, 40);
+
+  return Buffer.concat([wavHeader, pcmBuffer]);
+}
+
+/**
+ * Synthesizes neural voiceover using Edge-TTS CLI in the Docker container,
+ * falling back gracefully to synthetic PCM if edge-tts is unavailable.
+ */
+async function synthesizeVoiceoverAudio(text, voiceName = 'es-VE-SebastianNeural') {
+  const tmpId = crypto.randomUUID();
+  const tmpScript = path.join('/tmp', `tts_script_${tmpId}.txt`);
+  const tmpAudio = path.join('/tmp', `tts_audio_${tmpId}.mp3`);
+
   try {
-    const { stdout } = await execAsync(
-      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`
+    const cleanText = text
+      .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
+      .trim();
+    fs.writeFileSync(tmpScript, cleanText, 'utf-8');
+
+    await execAsync(
+      `edge-tts --rate="+18%" --voice "${voiceName}" -f "${tmpScript}" --write-media "${tmpAudio}"`,
+      { timeout: 30000 }
     );
-    const d = parseFloat(stdout.trim());
-    if (!isNaN(d) && d > 0) return d;
-  } catch {}
-  return 30;
+
+    if (fs.existsSync(tmpAudio)) {
+      const audioBuf = fs.readFileSync(tmpAudio);
+      return audioBuf;
+    }
+  } catch (ttsErr) {
+    console.warn('[Voiceover] Edge-TTS CLI not available or timed out, using synthetic PCM carrier:', ttsErr.message);
+  } finally {
+    try { if (fs.existsSync(tmpScript)) fs.unlinkSync(tmpScript); } catch {}
+    try { if (fs.existsSync(tmpAudio)) fs.unlinkSync(tmpAudio); } catch {}
+  }
+
+  return generateSyntheticVoiceTone(text);
 }
 
 /**
  * Health check endpoint
  */
-app.get('/health', async (req, res) => {
+app.get('/health', (_req, res) => {
+  return res.json({
+    status: 'ok',
+    service: 'edge-ai-video-engine',
+    queuePending: renderQueue.pending,
+    queueSize: renderQueue.size,
+    memoryRssMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+    heapUsedMb: Math.round(process.memoryUsage().heapUsed / (1024 * 1024)),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+/**
+ * Diagnostic probe endpoint to inspect ffmpeg, edge-tts and system capabilities
+ */
+app.get('/diag', async (_req, res) => {
   let ffmpegInstalled = false;
   let edgeTtsInstalled = false;
 
@@ -81,380 +186,153 @@ app.get('/health', async (req, res) => {
     edgeTtsInstalled = stdout.length > 0;
   } catch {}
 
-  const bestFont = resolveBestFont();
-
-  res.json({
+  return res.json({
     status: 'ok',
-    service: 'edge-video-engine',
+    service: 'edge-ai-video-engine',
     ffmpeg: ffmpegInstalled,
     edgeTts: edgeTtsInstalled,
-    activeFont: bestFont,
+    queuePending: renderQueue.pending,
+    queueSize: renderQueue.size,
+    memoryRssMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+    heapUsedMb: Math.round(process.memoryUsage().heapUsed / (1024 * 1024)),
     timestamp: new Date().toISOString(),
   });
 });
 
 /**
- * Diagnostic probe to inspect filters, fonts, and environment
- */
-app.get('/diag', async (req, res) => {
-  try {
-    const { stdout: ffmpegFilters } = await execAsync('ffmpeg -filters');
-    const { stdout: ffmpegVersion } = await execAsync('ffmpeg -version');
-    let fontsList = [];
-    if (fs.existsSync('/usr/share/fonts')) {
-      fontsList = fs.readdirSync('/usr/share/fonts', { recursive: true }).slice(0, 40);
-    }
-
-    res.json({
-      status: 'ok',
-      hasSubtitles: ffmpegFilters.includes('subtitles'),
-      hasZoompan: ffmpegFilters.includes('zoompan'),
-      hasDrawtext: ffmpegFilters.includes('drawtext'),
-      hasDrawbox: ffmpegFilters.includes('drawbox'),
-      bestFont: resolveBestFont(),
-      version: ffmpegVersion.split('\n')[0],
-      fonts: fontsList,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * Test render probe (2-second synthetic video)
- */
-app.get('/test-render', async (req, res) => {
-  const testOutput = path.join(PUBLIC_DIR, 'probe_test.mp4');
-  try {
-    const args = [
-      '-y',
-      '-threads', '2',
-      '-f', 'lavfi',
-      '-i', 'color=c=#0B132B:s=720x1280:d=2:r=30',
-      '-f', 'lavfi',
-      '-i', 'anullsrc=r=44100:cl=stereo',
-      '-t', '2',
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac',
-      testOutput
-    ];
-    const { stdout, stderr } = await execAsync(`ffmpeg ${args.join(' ')}`);
-    const size = fs.existsSync(testOutput) ? fs.statSync(testOutput).size : 0;
-    res.json({ success: true, size, stdout, stderr });
-  } catch (err) {
-    res.status(500).json({ error: err.message, stderr: err.stderr, stdout: err.stdout });
-  }
-});
-
-/**
- * Frame extraction probe (returns a JPEG snapshot of any rendered video)
- */
-app.get('/frame/:videoName/:sec', async (req, res) => {
-  const { videoName, sec } = req.params;
-  const safeVideoName = path.basename(videoName);
-  const videoPath = path.join(PUBLIC_DIR, safeVideoName);
-  const framePath = path.join(PUBLIC_DIR, `${safeVideoName}_${sec}s.jpg`);
-
-  if (!fs.existsSync(videoPath)) {
-    return res.status(404).json({ error: 'Video not found' });
-  }
-
-  try {
-    if (!fs.existsSync(framePath)) {
-      const cleanSec = parseFloat(sec) || 1;
-      await execFileAsync('ffmpeg', [
-        '-y',
-        '-ss', String(cleanSec),
-        '-i', videoPath,
-        '-vframes', '1',
-        '-q:v', '2',
-        framePath
-      ]);
-    }
-
-    if (!fs.existsSync(framePath) || fs.statSync(framePath).size === 0) {
-      return res.status(404).json({ error: `Frame at ${sec}s could not be extracted (timestamp exceeds video duration).` });
-    }
-
-    res.setHeader('Content-Type', 'image/jpeg');
-    const stream = fs.createReadStream(framePath);
-    stream.on('error', (err) => {
-      if (!res.headersSent) res.status(500).json({ error: err.message });
-    });
-    stream.pipe(res);
-  } catch (err) {
-    if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
-    }
-  }
-});
-
-/**
- * Full End-to-End Test probe: TTS + Multi-Scene Ken Burns Motion + Kinetic ASS Subtitles
- */
-app.get('/test-full', async (req, res) => {
-  const testDir = path.join('/tmp', `test-${Date.now()}`);
-  fs.mkdirSync(testDir, { recursive: true });
-  const audio = path.join(testDir, 'a.mp3');
-  const vtt = path.join(testDir, 's.vtt');
-  const ass = path.join(testDir, 's.ass');
-  const out = path.join(PUBLIC_DIR, 'test_full.mp4');
-
-  try {
-    const t0 = Date.now();
-    await execAsync(`edge-tts --rate="+18%" --voice "es-VE-SebastianNeural" --text "Prueba cinemática. Tu WhatsApp responde clientes al instante con Inteligencia Artificial." --write-media "${audio}" --write-subtitles "${vtt}"`);
-
-    const bestFont = resolveBestFont();
-    const assContent = convertVttToDynamicAss(fs.readFileSync(vtt, 'utf-8'), bestFont.name);
-    fs.writeFileSync(ass, assContent, 'utf-8');
-
-    const duration = await probeAudioDuration(audio);
-
-    // Prepare multi-scene visual assets (Flux 9:16 + Ken Burns)
-    const visualScenes = await prepareSceneAssets({
-      voiceoverText: "Prueba cinemática. Tu WhatsApp responde clientes al instante con Inteligencia Artificial.",
-      rawScenes: [],
-      totalDuration: duration,
-      workDir: testDir,
-    });
-
-    const { inputArgs, filterGraph } = buildMultiScenePipeline({
-      scenes: visualScenes,
-      title: 'Demo Cinemática IA',
-      totalDuration: duration,
-      assPath: ass,
-    });
-
-    const numVideoInputs = inputArgs.filter(arg => arg === '-i').length;
-    const voiceInputIdx = numVideoInputs;
-    const ambienceInputIdx = numVideoInputs + 1;
-    const fullFilterGraph = `${filterGraph};[${voiceInputIdx}:a]volume=1.0[voice];[${ambienceInputIdx}:a]volume=0.08,lowpass=f=400[ambience];[voice][ambience]amix=inputs=2:duration=first:dropout_transition=2[outa]`;
-
-    const ffmpegCmd = [
-      '-y',
-      '-threads', '2',
-      ...inputArgs,
-      '-i', audio,
-      '-f', 'lavfi', '-i', `sine=f=55:b=4:d=${Math.ceil(duration) + 2}`,
-      '-filter_complex', fullFilterGraph,
-      '-map', '[outv]',
-      '-map', '[outa]',
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-tune', 'fastdecode',
-      '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-shortest',
-      out
-    ];
-
-    await execFileAsync('ffmpeg', ffmpegCmd);
-    const durationMs = Date.now() - t0;
-    const size = fs.existsSync(out) ? fs.statSync(out).size : 0;
-    res.json({
-      success: true,
-      durationMs,
-      size,
-      sceneCount: visualScenes.length,
-      activeFont: bestFont,
-      outUrl: `https://edge-ai-video-engine.onrender.com/videos/test_full.mp4`
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message, stack: err.stack, stderr: err.stderr });
-  } finally {
-    try { fs.rmSync(testDir, { recursive: true, force: true }); } catch {}
-  }
-});
-
-/**
- * Main Video Render Endpoint
+ * Video Render Endpoint
  * POST /render-video
  */
 app.post('/render-video', async (req, res) => {
+  const parsed = RenderVideoSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Validation Error', details: parsed.error.issues });
+  }
+
   const {
-    title = 'Video Promocional con IA',
+    title,
     voiceoverText,
-    voiceName = 'es-VE-SebastianNeural',
-    scenes = [],
     recipientPhone,
     evolutionUrl,
     evolutionApiKey,
-    evolutionInstance = 'default',
+    evolutionInstance,
     socialCopy,
-    hashtags = [],
-    appOrigin,
-  } = req.body;
+    hashtags,
+    visualStoryboard,
+    kineticCaptions,
+    subtitles,
+    audioConfig,
+  } = parsed.data;
 
-  if (!voiceoverText || !recipientPhone) {
-    return res.status(400).json({
-      error: 'Missing required fields: voiceoverText and recipientPhone are required.',
-    });
-  }
+  // Use kineticCaptions or fallback to subtitles
+  const captionsToUse = (Array.isArray(kineticCaptions) && kineticCaptions.length > 0)
+    ? kineticCaptions
+    : subtitles;
 
   const renderId = crypto.randomUUID();
-  const workDir = path.join('/tmp', `render-${renderId}`);
-  fs.mkdirSync(workDir, { recursive: true });
 
-  const scriptPath = path.join(workDir, 'script.txt');
-  const audioPath = path.join(workDir, 'speech.mp3');
-  const vttPath = path.join(workDir, 'subtitles.vtt');
-  const assPath = path.join(workDir, 'subtitles.ass');
-  const outputFileName = `reel_${renderId}.mp4`;
-  const outputPath = path.join(PUBLIC_DIR, outputFileName);
-
-  console.log(`[Render ${renderId}] Starting cinematic AI video production for ${recipientPhone}...`);
-
-  // Run asynchronously and respond 202 Accepted immediately
-  res.status(202).json({
-    status: 'processing',
-    renderId,
-    message: 'Cinematic AI video rendering queued successfully in Render cloud.',
-  });
-
-  (async () => {
+  // Enqueue task strictly under concurrency 1 to prevent OOM 137 on Render 512MB RAM
+  renderQueue.add(async () => {
+    const t0 = Date.now();
     try {
-      // 1. Synthesize neural voice and subtitles using edge-tts
-      console.log(`[Render ${renderId}] 1/4 Synthesizing voice with Edge-TTS (${voiceName})...`);
-      const cleanVoiceover = voiceoverText
-        .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
-        .trim();
-      fs.writeFileSync(scriptPath, cleanVoiceover, 'utf-8');
+      console.log(`[VideoEngine ${renderId}] Starting composition for ${recipientPhone}...`);
 
-      await execAsync(
-        `edge-tts --rate="+18%" --voice "${voiceName}" -f "${scriptPath}" --write-media "${audioPath}" --write-subtitles "${vttPath}"`
-      );
+      const voiceoverBuffer = await synthesizeVoiceoverAudio(voiceoverText);
+      const words = voiceoverText.trim().split(/\s+/).length;
+      const estimatedDurationSec = Math.max(5, Math.min(45, Math.ceil(words / 2.5)));
 
-      // 2. Generate Kinetic ASS Subtitles
-      console.log(`[Render ${renderId}] 2/4 Converting VTT to Kinetic ASS Subtitles...`);
-      const bestFont = resolveBestFont();
-      if (fs.existsSync(vttPath)) {
-        const vttData = fs.readFileSync(vttPath, 'utf-8');
-        const assData = convertVttToDynamicAss(vttData, bestFont.name);
-        fs.writeFileSync(assPath, assData, 'utf-8');
-      }
-
-      // 3. Audio duration & Multi-scene asset sourcing (Flux AI + Pexels B-roll)
-      const totalDuration = await probeAudioDuration(audioPath);
-      console.log(`[Render ${renderId}] 3/4 Sourcing multi-scene visual assets (Duration: ${totalDuration}s)...`);
-      const visualScenes = await prepareSceneAssets({
-        voiceoverText,
-        rawScenes: scenes,
-        totalDuration,
-        workDir,
-      });
-
-      // 4. Build Multi-Scene FilterGraph with Ken Burns & Compile with FFmpeg
-      console.log(`[Render ${renderId}] 4/5 Compiling cinematic 9:16 vertical video with FFmpeg...`);
-      const { inputArgs, filterGraph } = buildMultiScenePipeline({
-        scenes: visualScenes,
+      const mp4Buffer = await composeVideoToBuffer({
         title,
-        totalDuration,
-        assPath: fs.existsSync(assPath) ? assPath : null,
+        voiceoverBuffer,
+        visualStoryboard,
+        kineticCaptions: captionsToUse,
+        audioConfig,
+        durationSec: estimatedDurationSec,
+        fps: 30,
+        width: 1080,
+        height: 1920,
       });
 
-      const numVideoInputs = inputArgs.filter(arg => arg === '-i').length;
-      const voiceInputIdx = numVideoInputs;
-      const ambienceInputIdx = numVideoInputs + 1;
-      const fullFilterGraph = `${filterGraph};[${voiceInputIdx}:a]volume=1.0[voice];[${ambienceInputIdx}:a]volume=0.08,lowpass=f=400[ambience];[voice][ambience]amix=inputs=2:duration=first:dropout_transition=2[outa]`;
+      // Persist rendered video in PUBLIC_DIR for web inspection & direct download
+      const outFileName = `reel_${renderId}.mp4`;
+      const outFilePath = path.join(PUBLIC_DIR, outFileName);
+      fs.writeFileSync(outFilePath, mp4Buffer);
 
-      const ffmpegCmd = [
-        '-y',
-        '-threads', '1',
-        ...inputArgs,
-        '-i', audioPath,
-        '-f', 'lavfi', '-i', `sine=f=55:b=4:d=${Math.ceil(totalDuration) + 2}`,
-        '-filter_complex', fullFilterGraph,
-        '-map', '[outv]',
-        '-map', '[outa]',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-tune', 'fastdecode',
-        '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-shortest',
-        outputPath
-      ];
-
-      await new Promise((resolve, reject) => {
-        const proc = spawn('nice', ['-n', '19', 'ffmpeg', ...ffmpegCmd]);
-        let lastErr = '';
-        proc.stderr.on('data', (d) => {
-          const msg = d.toString();
-          lastErr = msg;
-          if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('failed') || msg.includes('Cannot')) {
-            console.error(`[Render ${renderId} FFmpeg Err]:`, msg.trim());
-          }
-        });
-        proc.on('close', (code) => {
-          if (code === 0) {
-            resolve();
-          } else {
-            console.error(`[Render ${renderId} FFmpeg Exit ${code}]:`, lastErr.trim());
-            reject(new Error(`FFmpeg exited with code ${code}`));
-          }
-        });
-        proc.on('error', (err) => {
-          console.warn(`[Render ${renderId}] nice invocation failed, spawning ffmpeg directly:`, err.message);
-          const fbProc = spawn('ffmpeg', ffmpegCmd);
-          fbProc.on('close', (c) => (c === 0 ? resolve() : reject(new Error(`FFmpeg code ${c}`))));
-          fbProc.on('error', reject);
-        });
-      });
-      console.log(`[Render ${renderId}] Cinematic video compiled successfully: ${outputPath}`);
-
-      // 5. Send video to WhatsApp via Evolution API
+      // Dispatch MP4 directly to WhatsApp if credentials are provided
       if (evolutionUrl && evolutionApiKey && recipientPhone) {
-        console.log(`[Render ${renderId}] 5/5 Dispatching cinematic video to WhatsApp (+${recipientPhone})...`);
-        const cleanBaseUrl = evolutionUrl.replace(/\/+$/, '');
-        const cleanPhone = recipientPhone.replace(/[^0-9]/g, '');
-
-        const engineBaseUrl = appOrigin || process.env.RENDER_EXTERNAL_URL || 'https://edge-ai-video-engine.onrender.com';
-        const downloadUrl = `${engineBaseUrl.replace(/\/+$/, '')}/videos/${outputFileName}`;
+        const cleanPhone = recipientPhone.replace(/\D/g, '');
+        const engineBaseUrl = process.env.RENDER_EXTERNAL_URL || 'https://edge-ai-video-engine.onrender.com';
+        const downloadUrl = `${engineBaseUrl.replace(/\/+$/, '')}/videos/${outFileName}`;
 
         const captionText =
           `🎬 *${title}*\n\n` +
           (socialCopy ? `${socialCopy}\n\n` : '') +
           (hashtags.length ? `${hashtags.join(' ')}\n\n` : '') +
           `🔗 *Descarga directa (HD):* ${downloadUrl}\n\n` +
-          `✨ *Video cinemático con IA (Flux 9:16 + Ken Burns + Subtítulos)* a costo $0 listo para publicar en Instagram Reels o TikTok.`;
+          `✨ *Video vertical 9:16 con IA* listo para publicar en Instagram Reels o TikTok.`;
 
-        const sendMediaUrl = `${cleanBaseUrl}/message/sendMedia/${evolutionInstance}`;
-        const evoRes = await fetch(sendMediaUrl, {
-          method: 'POST',
-          headers: {
-            apikey: evolutionApiKey,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            number: cleanPhone,
-            mediatype: 'video',
-            mimetype: 'video/mp4',
-            caption: captionText,
-            media: downloadUrl,
-            fileName: `${title.replace(/[^a-zA-Z0-9]/g, '_')}.mp4`,
-          }),
-        });
+        // Send URL-based media first for optimal performance, fallback to base64 if needed
+        try {
+          const evoRes = await fetch(`${evolutionUrl.replace(/\/+$/, '')}/message/sendMedia/${evolutionInstance}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: evolutionApiKey,
+            },
+            body: JSON.stringify({
+              number: cleanPhone,
+              mediatype: 'video',
+              mimetype: 'video/mp4',
+              caption: captionText,
+              media: downloadUrl,
+              fileName: `${title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.mp4`,
+            }),
+            signal: AbortSignal.timeout(35000),
+          });
 
-        if (evoRes.ok) {
-          console.log(`[Render ${renderId}] ✅ Cinematic video dispatched to WhatsApp successfully!`);
-        } else {
-          const errText = await evoRes.text().catch(() => '');
-          console.warn(`[Render ${renderId}] ⚠️ Evolution API sendMedia returned HTTP ${evoRes.status}:`, errText);
+          if (!evoRes.ok) {
+            // Fallback to Base64 binary payload if Evolution could not reach the external URL
+            const base64Mp4 = mp4Buffer.toString('base64');
+            await fetch(`${evolutionUrl.replace(/\/+$/, '')}/message/sendMedia/${evolutionInstance}`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: evolutionApiKey,
+              },
+              body: JSON.stringify({
+                number: cleanPhone,
+                mediatype: 'video',
+                mimetype: 'video/mp4',
+                caption: captionText,
+                media: base64Mp4,
+                fileName: `${title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.mp4`,
+              }),
+              signal: AbortSignal.timeout(35000),
+            });
+          }
+        } catch (waErr) {
+          console.warn('[VideoEngine] WhatsApp dispatch failed:', waErr.message);
         }
       }
-    } catch (pipelineErr) {
-      console.error(`[Render ${renderId}] ❌ Pipeline failed:`, pipelineErr);
-    } finally {
-      // Clean up workdir
-      try {
-        fs.rmSync(workDir, { recursive: true, force: true });
-      } catch {}
+
+      const durationMs = Date.now() - t0;
+      const memRss = Math.round(process.memoryUsage().rss / (1024 * 1024));
+      console.log(
+        `[VideoEngine ${renderId}] Render completed in ${durationMs}ms (${mp4Buffer.length} bytes, RSS: ${memRss}MB)`
+      );
+    } catch (renderErr) {
+      console.error(`[VideoEngine ${renderId} Render Error]:`, renderErr);
     }
-  })();
+  });
+
+  return res.status(202).json({
+    status: 'ACCEPTED',
+    message: 'Video job enqueued for in-memory composition',
+    renderId,
+    title,
+    recipientPhone,
+    queuePosition: renderQueue.size + renderQueue.pending,
+  });
 });
 
 /**
@@ -463,12 +341,12 @@ app.post('/render-video', async (req, res) => {
  * Periodically probing the public HTTPS endpoint through Render's external proxy
  * registers incoming web traffic and resets the 15-minute sleep countdown.
  */
-const KEEP_ALIVE_INTERVAL_MS = 9 * 60 * 1000; // 9 minutes
+const KEEP_ALIVE_INTERVAL_MS = 9 * 60 * 1000;
 const PUBLIC_ENGINE_URL = process.env.RENDER_EXTERNAL_URL || 'https://edge-ai-video-engine.onrender.com';
 const PUBLIC_EVO_URL = process.env.EVOLUTION_API_URL || 'https://evolution-api-latest-b4dt.onrender.com';
 
 function startKeepAlive() {
-  console.log(`[KeepAlive] Initialized self-ping service targeting ${PUBLIC_ENGINE_URL} every 9m to prevent idle sleep.`);
+  console.log(`[KeepAlive] Initialized self-ping service targeting ${PUBLIC_ENGINE_URL} every 9m.`);
   setInterval(async () => {
     try {
       const pingUrl = `${PUBLIC_ENGINE_URL.replace(/\/+$/, '')}/health`;
@@ -489,6 +367,6 @@ function startKeepAlive() {
 }
 
 app.listen(PORT, () => {
-  console.log(`🚀 Edge Video Engine running on port ${PORT}`);
+  console.log(`🚀 edge-ai-video-engine running on port ${PORT} with concurrency: 1 (< 512MB RAM target)`);
   startKeepAlive();
 });

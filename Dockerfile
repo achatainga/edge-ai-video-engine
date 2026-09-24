@@ -5,6 +5,7 @@ RUN apk add --no-cache \
     curl \
     ffmpeg \
     fontconfig \
+    gcompat \
     python3 \
     py3-pip \
     font-noto \
