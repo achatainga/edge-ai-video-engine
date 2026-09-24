@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { convertVttToDynamicAss, chunkWords, formatAssTime } from '../src/subtitleGenerator.js';
-import { buildScenePrompts } from '../src/sceneVisuals.js';
+import { buildScenePrompts, detectThemeCategory } from '../src/sceneVisuals.js';
 import { buildMultiScenePipeline } from '../src/backgroundProvider.js';
 
 test('formatAssTime: accurately formats seconds into ASS centisecond timestamp', () => {
@@ -58,3 +58,18 @@ test('buildMultiScenePipeline: produces valid filtergraph and input arguments', 
   assert.ok(filterGraph.includes('overlay'));
   assert.ok(filterGraph.includes('outv'));
 });
+
+test('detectThemeCategory: accurately classifies spiritual, wellness, nature, and business', () => {
+  assert.equal(detectThemeCategory('versículo bíblico del día y paz de Dios'), 'spiritual');
+  assert.equal(detectThemeCategory('rutina de ejercicio y receta saludable para el gym'), 'wellness');
+  assert.equal(detectThemeCategory('viaje a las montañas y playas paradisíacas'), 'nature');
+  assert.equal(detectThemeCategory('automatización de ventas y clientes en WhatsApp'), 'business');
+});
+
+test('buildScenePrompts: spiritual themes generate sacred and serene prompts', () => {
+  const scenes = buildScenePrompts('Un versículo bíblico sobre la paz de Dios que supera todo entendimiento');
+  assert.equal(scenes.length, 4);
+  assert.equal(scenes[0].theme, 'spiritual');
+  assert.ok(scenes[0].prompt.toLowerCase().includes('bible') || scenes[0].prompt.toLowerCase().includes('peace'));
+});
+
