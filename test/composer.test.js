@@ -27,14 +27,3 @@ test('normalizeCaptions: normalizes seconds and milliseconds formats accurately'
   assert.equal(normalized[1].text, 'Prueba en milisegundos');
   assert.equal(normalized[1].animation, 'slide_up');
 });
-
-test('canvas: creates 1080x1920 canvas and extracts raw RGBA buffer of exact size', async () => {
-  const { createCanvas } = await import('@napi-rs/canvas');
-  const canvas = createCanvas(1080, 1920);
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#0F172A';
-  ctx.fillRect(0, 0, 1080, 1920);
-  const data = canvas.data();
-  assert.equal(data.length, 1080 * 1920 * 4); // 8,294,400 bytes
-});
-

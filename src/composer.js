@@ -7,7 +7,6 @@
  * - Memory footprint strictly constrained under 300MB RSS (Render 512MB RAM cap)
  */
 
-import { createCanvas } from '@napi-rs/canvas';
 import { spawn } from 'child_process';
 import { Readable } from 'stream';
 
@@ -57,6 +56,7 @@ export function normalizeCaptions(rawCaptions) {
  * @returns {Promise<Buffer>} - Resolved with the output MP4 binary Buffer
  */
 export async function composeVideoToBuffer(options) {
+  const { createCanvas } = await import('@napi-rs/canvas');
   const width = options.width || 1080;
   const height = options.height || 1920;
   const fps = options.fps || 30;
