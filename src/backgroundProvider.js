@@ -61,26 +61,68 @@ export function resolveBestFont() {
 /**
  * Builds the Ken Burns zoom/pan expression for a single image scene
  */
-function buildKenBurnsFilter(motionType, durationSec) {
+export function buildKenBurnsFilter(motionType, durationSec) {
   const frames = Math.max(24, Math.round(durationSec * 24));
 
   switch (motionType) {
-    case 'pan-down':
-      // Slight constant zoom with slow downward tilt/pan
-      return `zoompan=z='1.15':x='iw/2-(iw/zoom/2)':y='if(lte(on,1),(ih-ih/zoom)/2,max(0,y-0.8))':d=${frames}:s=720x1280:fps=24,setsar=1`;
+    case 'punch-in':
+    case 'dynamic-zoom':
+      // Fast kinetic snap zoom for high-impact hooks (starts at 1.05, ramps rapidly to 1.28)
+      return `zoompan=z='min(zoom+0.0035,1.28)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=24,setsar=1`;
 
     case 'zoom-out':
-      // Smooth reveal: starts zoomed in at 1.20 and slowly expands out
-      return `zoompan=z='if(lte(zoom,1.0),1.20,max(1.001,zoom-0.0012))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=24,setsar=1`;
+    case 'ken_burns_zoom_out':
+      // Smooth cinematic reveal: starts zoomed in at 1.22 and slowly expands out to 1.001
+      return `zoompan=z='if(lte(zoom,1.0),1.22,max(1.001,zoom-0.0015))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=24,setsar=1`;
+
+    case 'pan-left':
+    case 'ken_burns_pan_left':
+      // Constant gentle zoom (1.15) tracking right-to-left
+      return `zoompan=z='1.15':x='if(lte(on,1),iw-iw/zoom,max(0,x-0.9))':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=24,setsar=1`;
 
     case 'pan-right':
-      // Slight constant zoom with horizontal tracking pan
-      return `zoompan=z='1.15':x='if(lte(on,1),0,min(iw-iw/zoom,x+0.8))':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=24,setsar=1`;
+    case 'ken_burns_pan_right':
+      // Constant gentle zoom (1.15) tracking left-to-right
+      return `zoompan=z='1.15':x='if(lte(on,1),0,min(iw-iw/zoom,x+0.9))':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=24,setsar=1`;
+
+    case 'pan-down':
+    case 'tilt-down':
+      // Constant zoom with downward tilt/pan
+      return `zoompan=z='1.15':x='iw/2-(iw/zoom/2)':y='if(lte(on,1),0,min(ih-ih/zoom,y+0.9))':d=${frames}:s=720x1280:fps=24,setsar=1`;
+
+    case 'pan-up':
+    case 'tilt-up':
+      // Constant zoom with upward tilt/pan
+      return `zoompan=z='1.15':x='iw/2-(iw/zoom/2)':y='if(lte(on,1),ih-ih/zoom,max(0,y-0.9))':d=${frames}:s=720x1280:fps=24,setsar=1`;
+
+    case 'dynamic-pulse':
+      // Subtle rhythmic breathing / pulsing motion
+      return `zoompan=z='1.10+0.05*sin(2*PI*on/48)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=24,setsar=1`;
 
     case 'zoom-in':
+    case 'ken_burns_zoom_in':
     default:
-      // Standard cinematic hook zoom-in (1.0 to 1.20)
-      return `zoompan=z='min(zoom+0.0012,1.20)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=24,setsar=1`;
+      // Standard cinematic hook zoom-in (1.0 to 1.22)
+      return `zoompan=z='min(zoom+0.0015,1.22)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=24,setsar=1`;
+  }
+}
+
+/**
+ * Returns FFmpeg eq filter values for specific aesthetic color mood
+ */
+export function getColorGradingFilter(colorMood = 'vibrant') {
+  switch (colorMood) {
+    case 'warm':
+      return 'eq=saturation=1.22:contrast=1.07:brightness=0.01';
+    case 'neon':
+      return 'eq=saturation=1.30:contrast=1.10:brightness=0.02';
+    case 'cool':
+      return 'eq=saturation=1.16:contrast=1.07:brightness=0.01';
+    case 'cinematic':
+      return 'eq=saturation=1.16:contrast=1.08:brightness=0.0';
+    case 'vibrant':
+    default:
+      return 'eq=saturation=1.20:contrast=1.07:brightness=0.01';
   }
 }
 
@@ -117,23 +159,25 @@ export function buildMultiScenePipeline({
       const dur = Math.max(1, Number(scene.durationSec) || 4);
 
       if (scene.type === 'video' && scene.filePath && fs.existsSync(scene.filePath)) {
-        // Video B-roll clip: scale, crop to 9:16 portrait, trim duration
+        // Video B-roll clip: scale, crop to 9:16 portrait, clone-pad if clip is short to prevent audio desync, trim to duration, ensure 24fps & yuv420p for concat
         inputArgs.push('-i', scene.filePath);
         sceneFilterBlocks.push(
-          `[${idx}:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,trim=0:${dur},setpts=PTS-STARTPTS[v${idx}]`
+          `[${idx}:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,fps=24,tpad=stop_mode=clone:stop_duration=${dur},trim=0:${dur},setpts=PTS-STARTPTS,format=yuv420p[v${idx}]`
         );
         concatInputs.push(`[v${idx}]`);
       } else if (scene.type === 'image' && scene.filePath && fs.existsSync(scene.filePath)) {
-        // AI image: Ken Burns camera motion (zoom-in, pan-down, zoom-out, pan-right)
+        // AI or Stock image: Pre-scale and crop to 9:16 (1080x1920) first to eliminate squishing/distortion across all source aspect ratios (landscape, square, portrait), then apply Ken Burns camera motion
         inputArgs.push('-i', scene.filePath);
         const kbFilter = buildKenBurnsFilter(scene.motionType, dur);
-        sceneFilterBlocks.push(`[${idx}:v]${kbFilter}[v${idx}]`);
+        sceneFilterBlocks.push(
+          `[${idx}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,${kbFilter},format=yuv420p[v${idx}]`
+        );
         concatInputs.push(`[v${idx}]`);
       } else {
         // Fallback procedural for this individual scene
         inputArgs.push('-f', 'lavfi', '-t', String(dur), '-i', 'color=c=#0B132B:s=64x64:r=24');
         sceneFilterBlocks.push(
-          `[${idx}:v]format=rgb24,geq=r='20+15*sin(2*PI*(X/64+T/6))':g='22+18*cos(2*PI*(Y/64-T/5))':b='65+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic,format=yuv420p,setsar=1[v${idx}]`
+          `[${idx}:v]format=rgb24,geq=r='20+15*sin(2*PI*(X/64+T/6))':g='22+18*cos(2*PI*(Y/64-T/5))':b='65+35*sin(2*PI*(X/64+Y/64+T/7))',scale=720:1280:flags=bicubic,setsar=1,fps=24,format=yuv420p[v${idx}]`
         );
         concatInputs.push(`[v${idx}]`);
       }
@@ -148,20 +192,20 @@ export function buildMultiScenePipeline({
     }
   }
 
-  // Common Overlays:
-  // 1. Cinematic dark contrast layer (40% opacity) for subtitle readability
+  // Common Overlays & Aesthetic Color Grading:
+  // 1. Vibrant Color Grading: boosts saturation & contrast for eye-catching Reels/TikTok aesthetic (eliminates washed out look)
   sceneFilterBlocks.push(
-    `[raw_bg]drawbox=x=0:y=0:w=720:h=1280:color=black@0.40:t=fill[bg]`
+    `[raw_bg]eq=saturation=1.20:contrast=1.07:brightness=0.01[graded_bg]`
   );
 
-  // 2. Anti-watermark safety vignette (blanks out bottom 95px so no watermark or logo is ever visible)
+  // 2. Translucent lower-third safety vignette (subtle dark fade black@0.25 preserving visual brightness and clarity)
   sceneFilterBlocks.push(
-    `[bg]drawbox=x=0:y=1185:w=720:h=95:color=black@0.95:t=fill[clean_bg]`
+    `[graded_bg]drawbox=x=0:y=1160:w=720:h=120:color=black@0.25:t=fill[clean_bg]`
   );
 
-  // 3. Translucent header badge with neon top accent line
+  // 3. Translucent header badge with neon top accent line (modern glassmorphism)
   sceneFilterBlocks.push(
-    `[clean_bg]drawbox=x=50:y=75:w=620:h=80:color=0x0B0F19@0.85:t=fill,drawbox=x=50:y=75:w=620:h=3:color=0x00FF88@1:t=fill[vhdr]`
+    `[clean_bg]drawbox=x=50:y=75:w=620:h=80:color=0x0B0F19@0.65:t=fill,drawbox=x=50:y=75:w=620:h=3:color=0x00FF88@1:t=fill[vhdr]`
   );
 
   // 4. Header Title Text
